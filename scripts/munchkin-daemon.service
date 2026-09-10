@@ -1,0 +1,16 @@
+[Unit]
+Description=MarketMunchkin trading agent scheduler
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/seraphius/MarketMunchkin
+ExecStart=/home/seraphius/MarketMunchkin/.venv/bin/munchkin daemon
+Restart=on-failure
+TimeoutStopSec=900
+KillSignal=SIGTERM
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=MarketMunchkin dashboard (http://0.0.0.0:8787)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/seraphius/MarketMunchkin
+ExecStart=/home/seraphius/MarketMunchkin/.venv/bin/munchkin web --host 0.0.0.0 --port 8787
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

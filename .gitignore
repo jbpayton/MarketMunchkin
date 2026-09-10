@@ -1,0 +1,11 @@
+.env
+.venv/
+data/
+logs/
+__pycache__/
+*.pyc
+*.pickle
+*.parquet
+.pytest_cache/
+marketmunchkin.egg-info/
+*.html.bak

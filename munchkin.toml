@@ -1,0 +1,60 @@
+# MarketMunchkin configuration. Secrets live in .env, never here.
+
+[llm]
+reasoning_effort = "medium"   # off | low | medium | high | xhigh (default; per-phase overrides below)
+temperature = 0.3
+max_tool_calls = 36
+context_char_budget = 190000
+tool_result_max_chars = 5000
+
+[llm.reasoning_by_phase]
+reflect = "high"
+research = "high"
+premarket = "medium"
+intraday = "medium"
+event = "medium"
+postmarket = "medium"
+adhoc = "medium"
+
+[risk]
+starting_capital = 500.0
+max_position_pct = 0.40
+max_options_pct = 0.60
+max_positions = 5
+max_daily_loss_pct = 0.15
+enforce_pdt = false   # FINRA retired the PDT rule 2026-06-04; cash account -> settled-funds rule is the real limit
+max_day_trades_5d = 3
+require_settled_cash = true
+min_stock_price = 1.0
+min_avg_dollar_volume = 5000000
+max_option_spread_pct = 0.30
+min_option_open_interest = 50
+min_option_dte = 3
+max_option_dte = 120
+size_mult_speculative = 0.5
+size_mult_no_catalyst = 0.35
+research_min_charts = 4
+
+[schedule]
+premarket = ["08:45"]
+postmarket = ["16:15"]
+
+[watch]
+poll_seconds = 60
+continuous = true               # market hours: back-to-back sessions (min_gap_seconds apart); events preempt
+min_gap_seconds = 60
+intraday_interval_min = 30      # only used when continuous = false
+offhours_interval_min = 30      # queued tasks / reflection outside market hours
+offhours_windows = ["06:30-08:40", "16:25-21:30"]
+weekend_window = "09:00-19:00"
+max_reflect_per_day = 8
+event_cooldown_min = 8
+position_move_pct = 3.0
+index_move_pct = 0.8
+news_wake = true
+auto_stops = true
+expiry_guard = true
+expiry_wake_dte = 1
+expiry_force_close_time = "14:30"
+expiry_dne_time = "15:45"
+assignment_delta = 0.85
