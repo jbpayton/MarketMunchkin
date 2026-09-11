@@ -10,13 +10,8 @@
 </p>
 
 <p align="center">
-  <b>Local LLM</b> · <b>Alpaca paper account</b> · <b>Cash only</b> · <b>Free data sources</b> · <b>Every decision traced</b>
+  <b>Local LLM</b> · <b>Alpaca, paper or live</b> · <b>Cash only</b> · <b>Free data sources</b> · <b>Every decision traced</b>
 </p>
-
-> **This is an experiment, not investment advice.** MarketMunchkin is research software that lets a language
-> model place trades. It is wired to a paper account by default and it can and will lose money if you point it at
-> a real one. Nothing here is a recommendation to buy or sell anything. Read the [full disclaimer](#disclaimer)
-> before you run it.
 
 ![Overview: equity curve with axes, state-of-the-world dials, positions with resting stops, armed entries, the last session's reasoning as a timeline](docs/screenshots/overview.png)
 
@@ -28,8 +23,9 @@ grades every catalyst by how well it is sourced, and only then places small, sto
 risk engine it cannot talk its way past. Everything it thinks, calls and decides is journaled and drawn on the
 dashboard, so you can see why it did what it did.
 
-It started as a "$500 to something" experiment with a 27B model in LM Studio. It works with any
-OpenAI-compatible server that supports tool calling (LM Studio, Ollama, vLLM, OpenRouter, OpenAI, Anthropic).
+It started as a "$500 to something" project with a 27B model in LM Studio, wired to an Alpaca paper account to
+begin with; the same code drives a live account with one flag. It works with any OpenAI-compatible server that
+supports tool calling (LM Studio, Ollama, vLLM, OpenRouter, OpenAI, Anthropic).
 
 ## What you see
 
@@ -198,25 +194,22 @@ munchkin baseline --reset                          # re-anchor the virtual accou
 - The sandbox for model-written code runs in a separate interpreter with a clean environment and resource limits.
 - The dashboard has no authentication beyond an optional token. Keep it on your LAN or VPN.
 
-## Going live later
+## Going live
 
-Point `.env` at live keys with `ALPACA_PAPER=false`, review `munchkin.toml` first, and start with the Defensive
-style. The same risk engine, daemon and journal apply. Please read the disclaimer below first, twice.
+Point `.env` at live keys with `ALPACA_PAPER=false` and review the limits in `munchkin.toml`. The same risk engine,
+daemon and journal apply. Starting in the Defensive style and letting the journal fill up for a few weeks is a
+sensible way in.
 
 ## Disclaimer
 
-MarketMunchkin is provided for research and educational purposes. It is **not** financial, investment, tax or
-legal advice, and its author is not a registered investment adviser or broker-dealer.
+MarketMunchkin is software, not financial advice. Its author is not a registered investment adviser or
+broker-dealer, and nothing in this repository is a recommendation to buy or sell anything.
 
-- Trading stocks and options involves substantial risk of loss. Options can expire worthless; a debit spread can
-  lose its entire premium. Past performance of the software, the strategies it discovers, or any backtest shown
-  in it is no guarantee of future results.
-- The software is driven by a language model. Language models make mistakes, misread sources, and can be
-  confidently wrong. The risk engine limits the damage a bad decision can do; it does not make decisions good.
-- Data comes from free, third-party sources that can be delayed, wrong or unavailable.
+- Trading stocks and options involves risk of loss. Options can expire worthless. Past performance of the
+  software, the strategies it finds, or any backtest it shows is no guarantee of future results.
+- The decisions are made by a language model. Language models make mistakes and can be confidently wrong. The
+  risk engine bounds what a bad decision can cost; it does not make decisions good.
+- Market data comes from free third-party sources that can be delayed, wrong or unavailable.
 - The software is provided "as is", without warranty of any kind. The authors and contributors accept no
-  liability for any loss or damage arising from its use. You are solely responsible for any account you
-  connect to it and for complying with your broker's terms and the laws that apply to you.
-- It ships pointed at a **paper** account. If you connect real money, you do so at your own risk.
-
-If any of that gives you pause, keep it on paper. That is what it is for.
+  liability for any loss arising from its use. You are responsible for any account you connect to it and for
+  complying with your broker's terms and the laws that apply to you.
