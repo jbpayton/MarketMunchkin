@@ -184,8 +184,14 @@ class Watcher:
         now = now_et()
         for sym, rec in recs.items():
             if expired(rec, now):
+                from .entries import arm_outcome, arm_outcome_text
                 self.entries.disarm(sym)
-                actions.append(f"{sym}: armed entry expired (was: {rec['direction']} {rec['trigger_price']})")
+                rv = arm_outcome_text(arm_outcome(self.m, rec))
+                try:
+                    self.j.add_note(rv + " (expired)")
+                except Exception:
+                    pass
+                actions.append(f"{sym}: armed entry expired (was: {rec['direction']} {rec['trigger_price']}); {rv}")
                 continue
         recs = self.entries.all()
         if not recs or not market_open or self.risk is None:

@@ -3,6 +3,7 @@ executes it the moment price crosses the trigger, through the same risk engine a
 from __future__ import annotations
 
 import datetime as dt
+import re
 import logging
 from typing import Any
 
@@ -96,6 +97,56 @@ class EntryBook:
                          for r in recs.values())
 
 
+def arm_outcome(market: Any, rec: dict[str, Any]) -> dict[str, Any]:
+    """How an armed entry actually behaved: did price touch the trigger, how close it came, and where the name went.
+    Used when an arm expires or is disarmed so the agent can review whether its triggers were reachable."""
+    out = {"symbol": rec["symbol"], "direction": rec["direction"], "trigger": rec["trigger_price"], "armed_at": rec.get("armed_at")}
+    try:
+        df = market.bars(rec["symbol"], "5Min", 400)
+        df.index = df.index.tz_convert("America/New_York")
+        t0 = dt.datetime.fromisoformat(rec["armed_at"])
+        after = df[df.index >= t0]
+        if after.empty:
+            out["note"] = "no bars since armed"
+            return out
+        p0, last = float(after["close"].iloc[0]), float(after["close"].iloc[-1])
+        trig = float(rec["trigger_price"])
+        if rec["direction"] == "above":
+            ext = float(after["high"].max()); closest = (trig / ext - 1) * 100; touched = ext >= trig
+        else:
+            ext = float(after["low"].min()); closest = (1 - trig / ext) * 100; touched = ext <= trig
+        out.update({"price_at_arm": round(p0, 2), "gap_at_arm_pct": round(abs(trig / p0 - 1) * 100, 2), "closest_pct": round(closest, 2),
+                    "touched": bool(touched), "extreme": round(ext, 2), "last": round(last, 2), "drift_pct": round((last / p0 - 1) * 100, 2),
+                    "bars": int(len(after))})
+    except Exception as e:
+        out["note"] = f"review failed: {str(e)[:80]}"
+    return out
+
+
+def arm_outcome_text(o: dict[str, Any]) -> str:
+    if "touched" not in o:
+        return f"ARM REVIEW {o['symbol']}: {o.get('note', '')}"
+    verdict = "touched" if o["touched"] else f"never reached ({abs(o['closest_pct']):.2f}% short at the closest)"
+    return (f"ARM REVIEW {o['symbol']} {o['direction']} {o['trigger']}: armed at {o['price_at_arm']} ({o['gap_at_arm_pct']}% away), {verdict}; "
+            f"name drifted {o['drift_pct']:+.2f}% to {o['last']} while armed")
+
+
+_CAP_RE = re.compile(r"would be \$([\d.]+).*?> cap \$([\d.]+)")
+
+
+def clamp_to_cap(notional: float, violations: list[str], floor: float = 25.0) -> tuple[float, str | None]:
+    """If the only problem is that the notional overshoots the per-underlying cap, shrink it to fit (never below `floor`)."""
+    caps = [m for v in violations for m in [_CAP_RE.search(v)] if m]
+    if len(violations) != 1 or not caps:
+        return notional, None
+    exposure, cap = float(caps[0].group(1)), float(caps[0].group(2))
+    room = cap - (exposure - notional) - 0.05
+    if room < floor:
+        return notional, None
+    new = float(int(room * 100) / 100)
+    return new, f"notional trimmed from ${notional:.2f} to ${new:.2f} to fit the cap"
+
+
 def execute_entry(rec: dict[str, Any], price: float, risk, broker, market, journal, exits, limits=None) -> str:
     """Run the same checks as buy_stock, then buy at market (notional) and arm the stop. Option expressions are resolved at fire time."""
     sym = rec["symbol"]
@@ -109,6 +160,12 @@ def execute_entry(rec: dict[str, Any], price: float, risk, broker, market, journ
     pos = broker.positions()
     st = risk.state(positions=pos)
     viol = risk.check_stock_buy(sym, rec["notional"], price, "market", None, st, pos, rec.get("catalyst_grade"))
+    trimmed = None
+    if viol:
+        new_notional, trimmed = clamp_to_cap(float(rec["notional"]), viol)
+        if trimmed:
+            rec = dict(rec, notional=new_notional)
+            viol = risk.check_stock_buy(sym, rec["notional"], price, "market", None, st, pos, rec.get("catalyst_grade"))
     if not st.market_open:
         viol.append("market closed")
     if viol:

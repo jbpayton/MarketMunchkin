@@ -477,3 +477,25 @@ def test_telegram_bot_pairing_commands_and_requests(tmp_path, monkeypatch):
     assert TG.notify("z", kind="errors", force=True) is True
     TG.mute(5); assert TG.notify("m", kind="sessions") is False and TG.notify("m", kind="replies", chat_id=42, force=True) is True
     assert bot.handle_text(99, "/status").startswith("This chat is not paired")
+
+
+def test_clamp_to_cap_and_arm_outcome():
+    import pandas as pd
+    from munchkin.entries import arm_outcome, arm_outcome_text, clamp_to_cap
+    v = ["exposure to HPQ would be $100.00 (stock + options combined) > cap $99.98 (catalyst grade 'speculative' scales the cap by 0.50)"]
+    n, note = clamp_to_cap(100.0, v)
+    assert n == 99.93 and "trimmed" in note
+    assert clamp_to_cap(100.0, v + ["market closed"]) == (100.0, None)          # only trims when the cap is the sole problem
+    assert clamp_to_cap(100.0, ["exposure to X would be $100.00 > cap $10.00"]) == (100.0, None)   # below the floor: leave it to the engine
+
+    class M:
+        def bars(self, sym, tf, n):
+            idx = pd.date_range("2026-09-11 09:30", periods=6, freq="5min", tz="America/New_York")
+            return pd.DataFrame({"open": [200] * 6, "high": [201, 201, 200.5, 200, 199.8, 199.9], "low": [199.5, 199, 197.2, 196.3, 197, 198], "close": [200, 199.5, 198, 197, 198, 199], "volume": [1] * 6}, index=idx)
+    rec = {"symbol": "RTX", "direction": "below", "trigger_price": 196.5, "armed_at": "2026-09-11T09:30:00-04:00"}
+    o = arm_outcome(M(), rec)
+    assert o["touched"] is True and o["extreme"] == 196.3 and o["price_at_arm"] == 200 and o["drift_pct"] == -0.5
+    assert "touched" in arm_outcome_text(o)
+    rec["trigger_price"] = 195.0
+    o2 = arm_outcome(M(), rec)
+    assert o2["touched"] is False and o2["closest_pct"] > 0 and "never reached" in arm_outcome_text(o2)

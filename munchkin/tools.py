@@ -1138,6 +1138,30 @@ class ToolRegistry:
                 viol.append("for puts: need target_price < trigger_price < stop_price (underlying levels; the position's own stop is opt_stop_pct of premium)")
             if sp < trg * 0.80:
                 viol.append("stop more than 20% below the trigger; too loose")
+            # reachability: a trigger many ATRs away is a wish, not a plan
+            reach = ""
+            try:
+                px = (c.market.snapshots([u]).get(u) or {}).get("price")
+                atr = None
+                tbl, _ = scr.load()
+                if tbl is not None and u in tbl.index and "atr14_pct" in tbl.columns:
+                    atr = float(tbl.loc[u, "atr14_pct"])
+                if px:
+                    gap = abs(trg / float(px) - 1) * 100
+                    atr = atr or 2.0
+                    ratio = gap / max(0.2, atr)
+                    from math import erf, sqrt
+                    p_day = min(0.95, 2 * (1 - 0.5 * (1 + erf(ratio * 1.25 / sqrt(2)))))
+                    wrong_side = (direction == "above" and float(px) >= trg) or (direction == "below" and float(px) <= trg)
+                    if wrong_side:
+                        viol.append(f"price {px} is already {direction} the trigger {trg}: use buy_stock / buy_option now instead of arming")
+                    elif ratio > 1.5 and not not_before:
+                        viol.append(f"trigger is {gap:.1f}% away = {ratio:.1f} daily ATRs ({atr:.1f}%); a {expires_hours:.0f}h arm rarely gets there. "
+                                    "If the setup is valid at the current price, enter now (buy_stock / buy_option) and arm the add-on; otherwise arm within 1 ATR")
+                    else:
+                        reach = f" Trigger is {gap:.1f}% away ({ratio:.1f} ATR); rough odds of a touch within a day ~{int(p_day * 100)}%."
+            except Exception:
+                pass
             pos = self._positions()
             st = c.risk.state(positions=pos)
             cap = st.max_position_notional * c.risk.grade_multiplier(grade)
@@ -1162,7 +1186,7 @@ class ToolRegistry:
             rec = EB.arm(u, direction, trg, float(notional), sp, tp, thesis, grade, horizon, expires_hours, c.session_id, max_chase_pct, nb, spy_min_chg_pct,
                          expression, int(dte_target), float(opt_stop_pct), float(opt_target_pct))
             c.journal.add_decision(c.session_id, "arm", u, side="buy", qty=float(notional), price=trg, thesis=thesis, target=str(tp), stop=str(sp),
-                                   horizon=horizon, status="armed", meta={"catalyst_grade": grade, "direction": direction, "expires": rec["expires"]}, underlying=u)
+                                   horizon=horizon, status="armed", meta={"catalyst_grade": grade, "direction": direction, "expires": rec["expires"], "reach": reach.strip()}, underlying=u)
             cond = (f", not before {nb[:16]}" if nb else "") + (f", only if SPY today >= {spy_min_chg_pct}%" if spy_min_chg_pct is not None else "")
             ex = ""
             if expression != "stock":
@@ -1179,7 +1203,7 @@ class ToolRegistry:
                            else f". WARNING: {note}")
                 except Exception as e:
                     ex += f" (preview unavailable: {str(e)[:60]})"
-            return f"ARMED: {u} {expression} ${float(notional):.0f} when price {rec['direction']} {trg} (max chase {max_chase_pct}%){cond}{ex}, underlying stop {sp} target {tp}, expires {(rec['expires'] or 'never')[:16]}. The watcher executes it within a minute of the trigger and wakes you."
+            return f"ARMED: {u} {expression} ${float(notional):.0f} when price {rec['direction']} {trg} (max chase {max_chase_pct}%){cond}{ex}, underlying stop {sp} target {tp}, expires {(rec['expires'] or 'never')[:16]}.{reach} The watcher executes it within a minute of the trigger and wakes you."
 
         self.add("arm_entry", "State trading intent the watcher will execute for you when the UNDERLYING crosses trigger_price ('above' for breakouts, 'below' for pullbacks): expression = stock | call | put | call_spread | put_spread (options are resolved at fire time: expiry nearest dte_target, delta ~0.5 single or 0.55/0.30 vertical, limit inside the market, qty = notional / premium). Optional not_before (e.g. '2026-09-11T08:35' for after CPI) and spy_min_chg_pct tape filter. Runs the same risk checks at fire time, arms the stop (spreads are managed on net value), and wakes you. Use instead of 'no trigger met' or 'wait for the event'.",
                  _schema({"symbol": _p("symbol", "string", "ticker"), "direction": _p("direction", "string", "above | below"),
@@ -1204,10 +1228,16 @@ class ToolRegistry:
         def disarm_entry(symbol: str, reason: str) -> str:
             if not c.allow_trading:
                 return "trading disabled in this mode"
+            rec = EB.get(symbol)
             ok = EB.disarm(symbol)
             if ok:
-                c.journal.add_decision(c.session_id, "disarm", symbol.upper(), status="disarmed", meta={"reason": reason}, underlying=symbol.upper())
-            return f"{symbol.upper()} disarmed" if ok else f"no armed entry for {symbol.upper()}"
+                from .entries import arm_outcome, arm_outcome_text
+                rv = arm_outcome_text(arm_outcome(c.market, rec)) if rec else ""
+                c.journal.add_decision(c.session_id, "disarm", symbol.upper(), status="disarmed", meta={"reason": reason, "review": rv}, underlying=symbol.upper())
+                if rv and not c.dry_run:
+                    c.journal.add_note(rv + f" (disarmed: {reason[:100]})", c.session_id)
+                return f"{symbol.upper()} disarmed. {rv}"
+            return f"no armed entry for {symbol.upper()}"
 
         self.add("disarm_entry", "Cancel an armed conditional entry.", _schema({"symbol": _p("symbol", "string", "ticker"), "reason": _p("reason", "string", "why")}, ["symbol", "reason"]), disarm_entry)
 

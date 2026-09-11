@@ -111,6 +111,47 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         j.add_event("error", f"closed {n_orphans} orphaned session(s) left by a previous daemon stop")
     stop_requested = {"flag": False}
     degraded = {"flag": False}
+    import queue
+    import threading
+    wq: "queue.Queue[tuple[str, str]]" = queue.Queue()
+    watcher_thread: dict = {"t": None}
+    market_state = {"open": False}
+
+    def _watcher_loop() -> None:
+        """Own context (own SQLite connection, broker and risk engine); ticks every poll interval no matter what the main loop is doing."""
+        from .styles import effective_limits as _el, effective_watch as _ew, get_style as _gs
+        wctx = make_context()
+        wj = wctx.journal
+        wex = ExitManager(wctx.broker, wctx.market, wj)
+        ww = Watcher(wctx.broker, wctx.market, wj, wex, W, risk=wctx.risk)
+        cur_style = None
+        while not stop_requested["flag"]:
+            t0 = time.time()
+            try:
+                style = _gs(wj)
+                if style != cur_style:
+                    wctx.risk.L = _el(SETTINGS.risk, style)
+                    ww.cfg = _ew(SETTINGS.watch, style)
+                    cur_style = style
+                mo = market_state["open"]
+                events, actions = ww.tick(mo)
+                for a in actions:
+                    logging.info("exits: %s", a)
+                    wj.add_event("action", a)
+                    if not a.startswith("chore:") and "dropped" not in a and "expired" not in a:
+                        TG.notify(a, kind="fills")
+                for e in events:
+                    logging.info("event: %s", e)
+                    wj.add_event("event", e)
+                    TG.notify(e, kind="events")
+                    wq.put(("event", e))
+            except Exception as e:
+                logging.warning("watcher tick failed: %s", e)
+            sleep_s = (ww.cfg.poll_seconds if market_state["open"] else 300) - (time.time() - t0)
+            for _ in range(int(max(1.0, sleep_s))):
+                if stop_requested["flag"]:
+                    return
+                time.sleep(1)
 
     def _on_term(signum, frame):  # let the current session finish, then exit the loop
         stop_requested["flag"] = True
@@ -168,9 +209,10 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                 return 1e9
         board = ("DUTY: OPPORTUNITY BOARD. Rank the 5 best trade candidates for the next 1-3 sessions with exact entry (price or trigger), "
                  "stop, target, size (size_position), expression (stock / call / put / debit spread with the IV read) and catalyst grade with source. "
-                 "For every candidate that qualifies, ARM it with arm_entry (or buy it if the trigger is already met). 'No trigger met' is not an "
-                 "outcome: either arm the trigger or explain in one line why the name does not deserve an armed entry. Being flat with zero armed "
-                 "entries requires a written reason.")
+                 "If a setup is valid at the current price, BUY the probe now (buy_stock / buy_option) and, if you want more on weakness, arm the add-on; "
+                 "arm-only is for triggers that are genuinely not met yet (breakouts, reclaims, event-conditioned entries) and they must sit within one "
+                 "daily ATR of the price. Setups whose backtest measured entry at the signal close are bought at the signal, not below it. A board that "
+                 "ends with zero new exposure while candidates qualify needs a one-line reason per candidate.")
         if age_h("duty:brief_verified") > 3 and age_h("world_brief_ts") > 3:
             j.set("duty:brief_verified", now.isoformat(timespec="seconds"))
             return "DUTY: re-verify every number in the world brief with get_macro_data / get_macro_release; rewrite it with sources. Then do the opportunity board."
@@ -307,26 +349,22 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         except Exception as e:
             logging.warning("chores failed: %s", e)
 
-        # watcher
+        # watcher: runs in its own thread (sessions block this loop for minutes; a trigger touched mid-session must not be missed)
+        market_state["open"] = market_open
+        if watcher_thread["t"] is None:
+            watcher_thread["t"] = threading.Thread(target=_watcher_loop, name="watcher", daemon=True)
+            watcher_thread["t"].start()
+        while True:
+            try:
+                kind, text = wq.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "event":
+                pending.append(text) if text not in pending else None
         poll = W.poll_seconds if market_open else 300
         if last_watch is None or (now - last_watch).total_seconds() >= poll:
             last_watch = now
-            try:
-                events, actions = watcher.tick(market_open)
-            except Exception as e:
-                logging.warning("watcher tick failed: %s", e)
-                events, actions = [], []
-            for a in actions:
-                console.print(f"[dim]{now:%H:%M} exits: {a}[/dim]")
-                logging.info("exits: %s", a)
-                j.add_event("action", a)
-                if not a.startswith("chore:") and "dropped" not in a and "expired" not in a:
-                    TG.notify(a, kind="fills")
-            for e in events:
-                console.print(f"[yellow]{now:%H:%M} event: {e}[/yellow]")
-                logging.info("event: %s", e)
-                j.add_event("event", e)
-                TG.notify(e, kind="events")
+            events = []
             degraded_now = bool(getattr(ctx.market, "breaker", None) and ctx.market.breaker.open) or bool(ctx.broker.clock().get("degraded"))
             if degraded_now and not degraded["flag"]:
                 TG.notify("Alpaca is degraded (clock or data feed errors). Watching on fallback quotes; armed entries will not fire until the broker feed is back. Resting stops live at the broker and keep working.", kind="broker")

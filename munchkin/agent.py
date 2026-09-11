@@ -29,9 +29,14 @@ PHASE_INSTRUCTIONS = {
         "something material changed). Then manage existing positions against their plan (stops/targets/thesis). Run "
         "get_intraday_setups once every intraday session and research the strongest name even if you do not trade it. "
         "Then, only if settled cash allows, look for entries that clearly meet the playbook bar. "
+        "A setup that is valid at the current price is bought now (a probe), not armed below the market: the backtested edges "
+        "measure entry at the signal, and a limit 1-2% lower mostly fills on the days the thesis is failing. Arm only what is "
+        "genuinely conditional (a breakout, a reclaim, a post-print entry) and keep triggers within one daily ATR. "
         "Use limit orders for options; market or limit for stocks. One or two good decisions beat ten mediocre ones. "
         "Finish with set_plan for the next check-in."),
     "postmarket": (
+        "Start with today's ARM REVIEW notes (get_journal notes): triggers that were never reached are a placement problem, not bad luck; "
+        "say what changes. "
         "POST-MARKET review (market closed). Sync reality: read today's fills, decisions and any closed trades "
         "(get_journal trades / decisions). Grade each decision against its thesis honestly, and grade the world brief's "
         "facts and regime call against what happened (were the numbers right? sourced?). Record concrete lessons "

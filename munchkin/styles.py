@@ -56,7 +56,7 @@ STYLES: dict[str, dict[str, Any]] = {
                     "speculative catalysts at 0.75, unexplained moves at 0.5", "tighter stops, faster exits (+60–80% on premium)", "daily loss breaker at −20%",
                     "continuous sessions, events preempt, reasoning medium"],
         "brief": ("STYLE: AGGRESSIVE. Options are the primary instrument for fast setups: bought calls and puts (single contracts) sized "
-                  "$100–150, verticals only when IV is rich. Take the probe when a thesis is decent. Faster exits: first target +60–80% "
+                  "$100–150, verticals only when IV is rich. Take the probe NOW when a thesis is decent; do not park it as an arm below the market. Faster exits: first target +60–80% "
                   "on premium, cut at 50%. Stock only for slower theses or names without a liquid chain. Still cash-only, still no writing."),
     },
 }
