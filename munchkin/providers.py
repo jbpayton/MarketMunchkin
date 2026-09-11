@@ -21,7 +21,7 @@ log = logging.getLogger("munchkin.providers")
 
 SEARCH_CONFIG_FILE = DATA_DIR / "search.json"
 ENV_FILE = ROOT / ".env"
-KEY_NAMES = {"tavily": "TAVILY_API_KEY", "finnhub": "FINNHUB_API_KEY", "brave": "BRAVE_API_KEY"}
+KEY_NAMES = {"tavily": "TAVILY_API_KEY", "finnhub": "FINNHUB_API_KEY", "brave": "BRAVE_API_KEY", "telegram": "TELEGRAM_BOT_TOKEN"}
 DEFAULT_CONFIG = {
     "order": ["tavily", "searxng"],                      # web/news search chain, first that returns results wins (merged with the next on news)
     "enabled": {"tavily": True, "searxng": True, "finnhub": True, "brave": False},

@@ -432,3 +432,42 @@ def test_feed_breaker_fast_fails_after_repeated_timeouts():
     class Fine:
         def get(self, x): return "ok"
     assert GuardedClient(Fine(), b).get(1) == "ok" and b.fails == 0
+
+
+def test_telegram_bot_pairing_commands_and_requests(tmp_path, monkeypatch):
+    from munchkin import telegram as TG
+    monkeypatch.setattr(TG, "STATE_FILE", tmp_path / "telegram.json")
+    monkeypatch.setattr(TG, "token", lambda: "123:abc")
+    sent = []
+    monkeypatch.setattr(TG, "send", lambda chat, text: sent.append((chat, text)) or True)
+
+    class J:
+        def __init__(self): self.kv, self.tasks, self.events = {}, [], []
+        def get(self, k, d=None): return self.kv.get(k, d)
+        def set(self, k, v): self.kv[k] = v
+        def add_event(self, kind, text): self.events.append((kind, text))
+        def add_task(self, text, priority=2, session_id=None, kind="task"): self.tasks.append((text, kind)); return len(self.tasks)
+        def open_tasks(self, n=10): return [{"id": i + 1, "kind": k, "priority": 0, "text": t} for i, (t, k) in enumerate(self.tasks)]
+        def sessions(self, n=1): return [{"id": 7, "phase": "intraday", "started_at": "2026-09-11T10:00:00", "ended_at": "2026-09-11T10:05:00", "summary": "held UBER", "actions": "held UBER"}]
+    class B:
+        def positions(self): return [{"symbol": "UBER", "qty": "1.377", "avg_entry_price": "72.61", "current_price": "71.5", "unrealized_pl": "-1.5", "unrealized_plpc": "-0.02"}]
+    class R:
+        class S: virtual_equity, daily_pnl, buying_power_now, market_open = 498.7, -5.1, 400.0, True
+        def state(self): return R.S()
+    j = J(); bot = TG.Bot(j, B(), R())
+    assert "not paired" in bot.handle_text(42, "/status")
+    assert "No valid pairing code" in bot.handle_text(42, "/pair NOPE")
+    code = TG.new_pair_code()
+    assert bot.handle_text(42, f"/pair {code.lower()}").startswith("Paired") and TG.paired() == [42]
+    assert "Equity $498.70" in bot.handle_text(42, "/status") and "UBER" in bot.handle_text(42, "/positions")
+    assert "Confirm" in bot.handle_text(42, "/halt")
+    r = bot.handle_text(42, "/halt yes"); assert r.startswith("Halted") and TG.HALT_FILE.exists()
+    assert bot.handle_text(42, "/resume") and bot.handle_text(42, "/resume yes").startswith("Resumed") and not TG.HALT_FILE.exists()
+    assert bot.handle_text(42, "what is the plan for UBER?").startswith("Queued as request #1") and j.tasks[0][1] == "operator" and j.kv["telegram:task:1"] == 42
+    assert "✓ fills" in bot.handle_text(42, "/notify") and "✗ fills" in bot.handle_text(42, "/notify fills off")
+    # notify honours toggles, mute and rate limits
+    assert TG.notify("x", kind="fills") is False              # toggled off above
+    assert TG.notify("x", kind="errors") is True and TG.notify("y", kind="errors") is False   # rate limited
+    assert TG.notify("z", kind="errors", force=True) is True
+    TG.mute(5); assert TG.notify("m", kind="sessions") is False and TG.notify("m", kind="replies", chat_id=42, force=True) is True
+    assert bot.handle_text(99, "/status").startswith("This chat is not paired")

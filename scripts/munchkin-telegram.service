@@ -1,0 +1,14 @@
+[Unit]
+Description=MarketMunchkin Telegram command channel
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/seraphius/MarketMunchkin
+ExecStart=/home/seraphius/MarketMunchkin/.venv/bin/munchkin telegram
+Restart=always
+RestartSec=15
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

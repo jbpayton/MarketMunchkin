@@ -110,6 +110,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
     if n_orphans:
         j.add_event("error", f"closed {n_orphans} orphaned session(s) left by a previous daemon stop")
     stop_requested = {"flag": False}
+    degraded = {"flag": False}
 
     def _on_term(signum, frame):  # let the current session finish, then exit the loop
         stop_requested["flag"] = True
@@ -220,7 +221,13 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
             except Exception as e:
                 logging.warning("weekly chore failed: %s", e)
 
-    def _run(phase: str, task: str | None = None) -> None:
+    from . import telegram as TG
+
+    def _operator_task(nt: dict) -> str:
+        return (f"OPERATOR REQUEST #{nt['id']} (sent from the operator's phone; answer it directly and concisely, under 1500 characters of plain "
+                f"text; do only what it asks; close it with complete_task): {nt['text']}")
+
+    def _run(phase: str, task: str | None = None, task_id: int | None = None) -> None:
         nonlocal last_session_end, last_intraday
         console.print(f"[bold]{now_et():%H:%M} running {phase}{' (' + task[:80] + ')' if task else ''}[/bold]")
         j.add_event("session", f"{phase} session started" + (f": {task[:300]}" if task else ""))
@@ -229,12 +236,20 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
             console.print(Panel(res.final_text, title=f"{phase} summary", border_style="magenta"))
             j.add_event("session", f"{phase} session finished ({res.tool_calls} tool calls)")
             failures["n"] = 0
+            if task_id is not None:
+                chat = j.get(f"telegram:task:{task_id}")
+                j.complete_task(task_id, "answered")
+                if chat is not None:
+                    TG.notify(f"Request #{task_id}:\n{res.final_text}", kind="replies", chat_id=int(chat), force=True)
+            if phase in ("premarket", "postmarket"):
+                TG.notify(f"{phase.capitalize()} summary\n{res.final_text[:3500]}", kind="sessions")
         except Exception as e:
             logging.exception("session failed")
             console.print(f"[red]session failed: {e}[/red]")
             j.add_event("error", f"{phase} session failed: {str(e)[:300]}")
             failures["n"] += 1
             j.close_orphans("session failed: " + str(e)[:200])
+            TG.notify(f"Session failed ({phase}): {str(e)[:300]}\nBacking off {min(30, 5 * failures['n'])} min.", kind="errors")
         last_session_end = now_et()
         j.set("watch:last_session_end", last_session_end.isoformat(timespec="seconds"))
         if phase in ("intraday", "event"):
@@ -305,10 +320,19 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                 console.print(f"[dim]{now:%H:%M} exits: {a}[/dim]")
                 logging.info("exits: %s", a)
                 j.add_event("action", a)
+                if not a.startswith("chore:") and "dropped" not in a and "expired" not in a:
+                    TG.notify(a, kind="fills")
             for e in events:
                 console.print(f"[yellow]{now:%H:%M} event: {e}[/yellow]")
                 logging.info("event: %s", e)
                 j.add_event("event", e)
+                TG.notify(e, kind="events")
+            degraded_now = bool(getattr(ctx.market, "breaker", None) and ctx.market.breaker.open) or bool(ctx.broker.clock().get("degraded"))
+            if degraded_now and not degraded["flag"]:
+                TG.notify("Alpaca is degraded (clock or data feed errors). Watching on fallback quotes; armed entries will not fire until the broker feed is back. Resting stops live at the broker and keep working.", kind="broker")
+            elif degraded["flag"] and not degraded_now:
+                TG.notify("Alpaca feed recovered; normal operation resumed.", kind="broker", force=True)
+            degraded["flag"] = degraded_now
             pending += [e for e in events if e not in pending]
             try:
                 acct = ctx.broker.account()
@@ -330,6 +354,9 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                     pending = []
                 else:
                     nt = j.next_task()
+                    if nt and nt["kind"] == "operator":
+                        _run("intraday", _operator_task(nt), task_id=nt["id"])
+                        continue
                     if nt and nt["kind"] == "reflect":
                         j.complete_task(nt["id"], "reflect session run")
                         task, phase = f"SELF-ASSIGNED TASK #{nt['id']}: {nt['text']}", "reflect"
@@ -343,7 +370,10 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         else:
             since_end = (now - last_session_end).total_seconds() if last_session_end else 1e9
             backoff = min(1800, 300 * failures["n"]) if failures["n"] else 0
-            if since_end >= max(W.offhours_interval_min * 60, backoff) and (j.next_task() or _in_offhours(now, is_td) or _in_study(now)):
+            nt0 = j.next_task()
+            if nt0 and nt0["kind"] == "operator" and since_end >= max(60, backoff):
+                _run("adhoc", _operator_task(nt0), task_id=nt0["id"])
+            elif since_end >= max(W.offhours_interval_min * 60, backoff) and (nt0 or _in_offhours(now, is_td) or _in_study(now)):
                 nt = j.next_task()
                 if nt:
                     if nt["kind"] == "reflect":
@@ -436,6 +466,23 @@ def plan() -> None:
     from .journal import Journal
     j = Journal()
     console.print(f"[dim]{j.get('plan_ts')}[/dim]\n{j.get_plan() or '(no plan yet)'}")
+
+
+@app.command()
+def telegram() -> None:
+    """Long-poll Telegram for operator commands (run as the munchkin-telegram service). Needs TELEGRAM_BOT_TOKEN and a paired chat."""
+    from .agent import make_context
+    from .telegram import Bot, configured
+    ctx = make_context()
+    console.print("telegram poller " + ("started" if configured() else "waiting for TELEGRAM_BOT_TOKEN (set it on the Config tab)"))
+    Bot(ctx.journal, ctx.broker, ctx.risk).poll_forever()
+
+
+@app.command()
+def notify(text: str, kind: str = typer.Option("fills", help="fills | errors | broker | sessions | events")) -> None:
+    """Send a test message to the paired Telegram chats."""
+    from .telegram import notify as _notify
+    console.print("sent" if _notify(text, kind=kind, force=True) else "[red]not sent: token missing, no paired chat, or API error[/red]")
 
 
 @app.command()

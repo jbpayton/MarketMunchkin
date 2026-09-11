@@ -153,6 +153,24 @@ active after you approve them on the Brain page, where every skill can also be e
 instructions, not permissions: the fixed rules and the risk limits live in code and no skill can loosen them, and
 skill scripts run in the sandbox without credentials or network.
 
+## Telegram
+
+Alerts to your phone and a command channel, without exposing the dashboard to the internet.
+
+1. Create a bot with @BotFather and paste its token on the Config tab (it goes to `.env` like the other keys).
+2. Click "Generate pairing code" and send `/pair CODE` to the bot within ten minutes. Only paired chats are ever
+   answered or alerted; everyone else gets "not paired".
+3. Run the poller as a service: `cp scripts/munchkin-telegram.service ~/.config/systemd/user/ && systemctl --user enable --now munchkin-telegram`.
+
+What it pushes (each kind can be toggled on the Config tab or with `/notify KIND on|off`): fills, armed entries
+firing and stops re-arming; session failures; broker or data-feed degradation and recovery; the pre-market plan and
+post-market review. `/mute 60` silences alerts for an hour; replies to your own requests always come through.
+
+Commands: `/status`, `/positions`, `/arms`, `/last`, `/tasks`, `/halt` and `/resume` (each asks you to confirm),
+`/style defensive|balanced|aggressive`, `/disarm SYMBOL`, `/notify`. Anything else you type is queued as an
+operator request; the next session (within a minute during market hours, within a minute or so off hours) answers
+it and the reply lands in the chat.
+
 ## Quick start
 
 You need Python 3.12, an Alpaca account with paper trading, and an OpenAI-compatible model server with tool
@@ -170,8 +188,8 @@ cp .env.example .env && chmod 600 .env   # Alpaca paper keys, model server, Sear
 Run the daemon and the dashboard as user services:
 
 ```bash
-cp scripts/munchkin-daemon.service scripts/munchkin-web.service ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now munchkin-daemon munchkin-web
+cp scripts/munchkin-daemon.service scripts/munchkin-web.service scripts/munchkin-telegram.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now munchkin-daemon munchkin-web munchkin-telegram
 journalctl --user -u munchkin-daemon -f
 ```
 

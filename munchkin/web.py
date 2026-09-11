@@ -522,6 +522,40 @@ def _context_plan_safe(s):
         return {"tokens": None, "source": f"error: {str(e)[:60]}", "effective_chars": s.context_char_budget, "tool_result_chars": s.tool_result_max_chars, "warning": None}
 
 
+@app.get("/api/telegram")
+def api_telegram():
+    from . import telegram as TG
+    st = TG.load_state()
+    tok = TG.token()
+    return {"configured": bool(tok), "token_masked": ("*" * max(0, len(tok) - 4) + tok[-4:]) if tok else None, "chat_ids": st.get("chat_ids", []),
+            "notify": st.get("notify", {}), "kinds": TG.KINDS, "pair_code": st.get("pair_code") if time.time() < float(st.get("pair_expires", 0)) else None,
+            "muted_until": st.get("muted_until")}
+
+
+@app.post("/api/telegram")
+async def api_telegram_action(request: Request):
+    from . import telegram as TG
+    if request.headers.get("x-requested-with") != "munchkin":
+        raise HTTPException(403, "bad request origin")
+    body = await request.json()
+    action = body.get("action")
+    if action == "pair":
+        return {"ok": True, "pair_code": TG.new_pair_code()}
+    if action == "unpair":
+        TG.unpair(int(body.get("chat_id")))
+    elif action == "notify":
+        TG.set_notify(str(body.get("kind")), bool(body.get("on")))
+    elif action == "test":
+        ok = TG.notify("MarketMunchkin test message: alerts are working.", kind="fills", force=True)
+        return {"ok": ok, "detail": "sent" if ok else "not sent (token missing, no paired chat, or API error; check the web log)"}
+    elif action == "unmute":
+        TG.unmute()
+    else:
+        raise HTTPException(400, "unknown action")
+    ctx().journal.add_event("config", f"telegram: {action}")
+    return {"ok": True}
+
+
 @app.get("/api/skills")
 def api_skills():
     from .skills import SkillStore
