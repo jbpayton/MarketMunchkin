@@ -560,7 +560,7 @@ def _change_stamp() -> dict[str, Any]:
     """Cheap fingerprint of 'something happened': newest event / session / decision / trace ids and the last equity sample."""
     conn = ctx().journal.conn
     row = conn.execute("SELECT (SELECT MAX(id) FROM events), (SELECT MAX(id) FROM sessions), (SELECT MAX(id) FROM decisions), "
-                       "(SELECT MAX(id) FROM trace), (SELECT MAX(ended_at) FROM sessions), (SELECT COUNT(*) FROM kv WHERE key LIKE 'entry:%')").fetchone()
+                       "(SELECT MAX(id) FROM trace), (SELECT MAX(ended_at) FROM sessions), (SELECT COUNT(*) FROM kv WHERE key LIKE 'entries:%')").fetchone()
     return {"events": row[0], "sessions": row[1], "decisions": row[2], "trace": row[3], "ended": row[4], "arms": row[5],
             "halted": HALT_FILE.exists()}
 
@@ -581,6 +581,7 @@ async def api_stream():
                 cur = {"error": str(e)[:80]}
             if cur != last:
                 last = cur
+                _cache.pop("overview", None)      # the next render must see the change, not the 20 s cache
                 yield f"event: change\ndata: {json.dumps(cur)}\n\n"
             else:
                 beat += 1
