@@ -1,11 +1,7 @@
-"""LM Studio client.
-
-Two endpoints on the same server are used:
-  * /v1/chat/completions  (OpenAI-compatible) for the agentic tool loop, because
-    LM Studio's native /api/v1/chat does not accept client-defined function tools.
-  * /api/v1/chat          (LM Studio native) for one-shot prompts with explicit
-    reasoning control.
-"""
+"""LLM client over any OpenAI-compatible /v1/chat/completions server with tool calling:
+LM Studio, Ollama, vLLM, OpenAI, OpenRouter, Anthropic's compatibility layer, or anything custom.
+Provider, base URL, model and reasoning options live in settings (dashboard-editable); an optional
+bearer key comes from .env (LLM_API_KEY) and is never exposed to the model."""
 from __future__ import annotations
 
 import json
@@ -17,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from .config import LOG_DIR, SETTINGS, LLMSettings, redact
+from .config import LOG_DIR, SETTINGS, LLMSettings, llm_api_key, load_llm_settings, redact
 
 log = logging.getLogger("munchkin.llm")
 
@@ -41,11 +37,15 @@ class LoopResult:
 
 class LLMClient:
     def __init__(self, settings: LLMSettings | None = None):
-        s = settings or SETTINGS.llm
+        s = settings or load_llm_settings()
         self.s = s
         self.base = s.base_url.rstrip("/")
         self.model = s.model
-        self.client = httpx.Client(timeout=httpx.Timeout(s.timeout_s, connect=10.0))
+        headers = {"Content-Type": "application/json"}
+        key = llm_api_key()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        self.client = httpx.Client(timeout=httpx.Timeout(s.timeout_s, connect=10.0), headers=headers)
         self._trace = open(LOG_DIR / "llm_trace.jsonl", "a", encoding="utf-8")
 
     # ------------------------------------------------------------------ low level
@@ -66,8 +66,9 @@ class LLMClient:
             "messages": messages,
             "temperature": self.s.temperature if temperature is None else temperature,
             "max_tokens": max_tokens or self.s.max_tokens,
-            "reasoning_effort": reasoning_effort or self.s.reasoning_effort,
         }
+        if self.s.send_reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort or self.s.reasoning_effort
         if tools:
             payload["tools"] = tools
             if tool_choice:
@@ -85,22 +86,19 @@ class LLMClient:
 
     def simple(self, prompt: str, system: str | None = None, reasoning: str | None = None,
                max_tokens: int | None = None, temperature: float | None = None) -> str:
-        """One-shot completion through LM Studio's native API (no tools)."""
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "input": prompt,
-            "reasoning": reasoning or self.s.reasoning_effort,
-            "max_output_tokens": max_tokens or self.s.max_tokens,
-            "temperature": self.s.temperature if temperature is None else temperature,
-        }
-        if system:
-            payload["system_prompt"] = system
-        r = self.client.post(f"{self.base}/api/v1/chat", json=payload)
-        if r.status_code >= 400:
-            raise RuntimeError(f"LLM HTTP {r.status_code}: {redact(r.text[:500])}")
-        data = r.json()
-        parts = [o.get("content", "") for o in data.get("output", []) if o.get("type") == "message"]
-        return "\n".join(parts).strip()
+        """One-shot completion (no tools) through the same OpenAI-compatible endpoint."""
+        msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+        r = self.chat(msgs, max_tokens=max_tokens, temperature=temperature, reasoning_effort=reasoning)
+        return (r["message"].get("content") or "").strip()
+
+    def probe(self) -> dict[str, Any]:
+        """Connectivity + tool-calling check used by the dashboard and `munchkin test-llm`."""
+        t0 = time.time()
+        r = self.chat([{"role": "user", "content": "Call the ping tool, then reply OK."}],
+                      tools=[{"type": "function", "function": {"name": "ping", "description": "ping", "parameters": {"type": "object", "properties": {}}}}],
+                      max_tokens=64, reasoning_effort="low")
+        return {"ok": True, "model": self.model, "base_url": self.base, "tool_calls": bool(r["message"].get("tool_calls")),
+                "reasoning_field": bool(r["message"].get("reasoning_content")), "secs": round(time.time() - t0, 1)}
 
     # ------------------------------------------------------------------ context mgmt
     @staticmethod

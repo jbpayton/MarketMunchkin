@@ -429,10 +429,7 @@ def test_llm() -> None:
     """Quick LLM connectivity/tool-call check."""
     from .llm import LLMClient
     llm = LLMClient()
-    console.print("simple:", llm.simple("Reply with exactly: OK", reasoning="off", max_tokens=20))
-    r = llm.chat([{"role": "user", "content": "Call the ping tool."}],
-                 tools=[{"type": "function", "function": {"name": "ping", "description": "ping", "parameters": {"type": "object", "properties": {}}}}])
-    console.print("tool call:", r["message"].get("tool_calls"))
+    console.print(llm.probe())
 
 
 @app.command()

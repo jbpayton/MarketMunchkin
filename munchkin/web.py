@@ -11,10 +11,22 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from .config import HALT_FILE, SETTINGS, redact
+from .config import HALT_FILE, ROOT, SETTINGS, redact
 from .util import ET, fnum, is_option, now_et, occ_human
 
 app = FastAPI(title="MarketMunchkin")
+ASSETS = ROOT / "assets"
+
+
+@app.get("/assets/{name}")
+def asset(name: str):
+    from fastapi.responses import FileResponse
+    if "/" in name or ".." in name or not name.endswith(".png"):
+        raise HTTPException(404)
+    f = ASSETS / name
+    if not f.exists():
+        raise HTTPException(404)
+    return FileResponse(str(f), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 _TOKEN = os.environ.get("MUNCHKIN_WEB_TOKEN", "")
 _cache: dict[str, tuple[float, Any]] = {}
 _ctx = None
@@ -272,6 +284,66 @@ async def api_config_set(request: Request):
     return P.status()
 
 
+@app.get("/api/config/llm")
+def api_config_llm():
+    from .config import LLM_PRESETS, load_llm_settings, llm_api_key
+    s = load_llm_settings()
+    key = llm_api_key()
+    return {"provider": s.provider, "base_url": s.base_url, "model": s.model, "send_reasoning_effort": s.send_reasoning_effort,
+            "reasoning_effort": s.reasoning_effort, "reasoning_by_phase": s.reasoning_by_phase, "max_tool_calls": s.max_tool_calls,
+            "context_char_budget": s.context_char_budget, "key_masked": ("*" * max(0, len(key) - 4) + key[-4:]) if key else None,
+            "presets": {k: {"base_url": v["base_url"], "note": v["note"]} for k, v in LLM_PRESETS.items()}}
+
+
+@app.post("/api/config/llm")
+async def api_config_llm_set(request: Request):
+    from . import providers as P
+    from .config import LLM_OVERRIDE_FILE, LLM_PRESETS
+    if request.headers.get("x-requested-with") != "munchkin":
+        raise HTTPException(403, "bad request origin")
+    body = await request.json()
+    cur = {}
+    if LLM_OVERRIDE_FILE.exists():
+        cur = json.loads(LLM_OVERRIDE_FILE.read_text())
+    if "api_key" in body:
+        val = (body.get("api_key") or "").strip()
+        lines = [l for l in (P.ENV_FILE.read_text().splitlines() if P.ENV_FILE.exists() else []) if not l.strip().startswith("LLM_API_KEY=")]
+        if val:
+            lines.append(f"LLM_API_KEY={val}")
+        P.ENV_FILE.write_text("\n".join(lines) + "\n")
+        try:
+            P.ENV_FILE.chmod(0o600)
+        except Exception:
+            pass
+    prov = body.get("provider")
+    if prov:
+        if prov not in LLM_PRESETS:
+            raise HTTPException(400, "unknown provider preset")
+        cur["provider"] = prov
+        if LLM_PRESETS[prov]["base_url"] and not body.get("base_url"):
+            cur["base_url"] = LLM_PRESETS[prov]["base_url"]
+        cur["send_reasoning_effort"] = LLM_PRESETS[prov]["send_reasoning_effort"]
+    for k in ("base_url", "model", "reasoning_effort"):
+        if body.get(k):
+            cur[k] = str(body[k]).strip()
+    if "send_reasoning_effort" in body:
+        cur["send_reasoning_effort"] = bool(body["send_reasoning_effort"])
+    LLM_OVERRIDE_FILE.write_text(json.dumps(cur, indent=1))
+    ctx().journal.add_event("config", f"LLM settings changed from the dashboard: {cur.get('provider')} {cur.get('model')} @ {cur.get('base_url')}")
+    return api_config_llm()
+
+
+@app.post("/api/config/llm/test")
+async def api_config_llm_test(request: Request):
+    if request.headers.get("x-requested-with") != "munchkin":
+        raise HTTPException(403, "bad request origin")
+    try:
+        from .llm import LLMClient
+        return LLMClient().probe()
+    except Exception as e:
+        return {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
 @app.post("/api/config/test")
 async def api_config_test(request: Request):
     from . import providers as P
@@ -320,7 +392,8 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 4px;b
 .btn.danger{border-color:var(--dn);color:var(--dn);background:#2a1620}
 .confirm{margin-top:10px;border:1px solid var(--warn);border-radius:12px;padding:10px;background:#221c12}
 </style></head><body>
-<header><h1>🐣 MarketMunchkin <small id="now"></small><small id="daemon" class="pill"></small></h1>
+<link rel="icon" type="image/png" href="/assets/mascot-48.png">
+<header><h1><img src="/assets/mascot-48.png" alt="" style="width:28px;height:28px;image-rendering:pixelated;vertical-align:middle"> MarketMunchkin <small id="now"></small><small id="daemon" class="pill"></small></h1>
 <nav><button data-tab="overview" class="on">Overview</button><button data-tab="sessions">Sessions</button><button data-tab="journal">Journal</button><button data-tab="brain">Brain</button><button data-tab="config">Config</button></nav></header>
 <main id="main"></main>
 <script>
@@ -338,6 +411,9 @@ async function clearKey(p){if(!confirm('Clear the '+p+' key?'))return;await cfgP
 async function toggleProv(p,en){await cfgPost({action:'toggle',provider:p,enabled:en});render();}
 async function testProv(p){const el=$('#test-'+p);el.textContent='testing…';const r=await fetch('/api/config/test',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'munchkin'},body:JSON.stringify({provider:p})});const d=await r.json();el.innerHTML=(d.ok?'<span class="up">ok</span> ':'<span class="dn">fail</span> ')+esc(d.detail);}
 async function setOrder(){const v=$('#order').value.split(',').map(x=>x.trim()).filter(Boolean);await cfgPost({action:'order',order:v});render();}
+async function llmLoad(){const d=await j('/api/config/llm');const box=$('#llmbox');const opts=Object.keys(d.presets).map(k=>`<option value="${k}" ${k===d.provider?'selected':''}>${k} — ${esc(d.presets[k].note)}</option>`).join('');box.innerHTML=`<div style="display:flex;flex-direction:column;gap:8px"><select id="llm-prov" style="background:#11141a;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px">${opts}</select><input id="llm-url" value="${esc(d.base_url)}" placeholder="base URL, e.g. http://localhost:11434" style="background:#11141a;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px"><input id="llm-model" value="${esc(d.model)}" placeholder="model id" style="background:#11141a;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px"><div style="display:flex;gap:6px"><input id="llm-key" type="password" placeholder="API key (optional) — ${d.key_masked?'set: '+esc(d.key_masked):'not set'}" style="flex:1;background:#11141a;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px"><label class="dim" style="font-size:12px;display:flex;align-items:center;gap:4px"><input id="llm-re" type="checkbox" ${d.send_reasoning_effort?'checked':''}>send reasoning_effort</label></div><div style="display:flex;gap:6px"><button class="btn" style="width:auto" onclick="llmSave()">Save</button><button class="btn" style="width:auto" onclick="llmTest()">Test</button><span id="llm-test" class="dim" style="font-size:12px;align-self:center"></span></div><div class="mono dim" style="font-size:11px">reasoning per phase: ${esc(JSON.stringify(d.reasoning_by_phase))} · tool budget ${d.max_tool_calls} · context ${Math.round(d.context_char_budget/1000)}k chars</div></div>`;}
+async function llmSave(){const body={provider:$('#llm-prov').value,base_url:$('#llm-url').value.trim(),model:$('#llm-model').value.trim(),send_reasoning_effort:$('#llm-re').checked};const k=$('#llm-key').value.trim();if(k)body.api_key=k;const r=await fetch('/api/config/llm',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'munchkin'},body:JSON.stringify(body)});if(!r.ok){alert((await r.json()).detail||('HTTP '+r.status));return;}llmLoad();}
+async function llmTest(){const el=$('#llm-test');el.textContent='testing…';const r=await fetch('/api/config/llm/test',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'munchkin'},body:'{}'});const d=await r.json();el.innerHTML=d.ok?`<span class="up">ok</span> ${esc(d.model)} · tools ${d.tool_calls?'yes':'NO'} · ${d.secs}s`:`<span class="dn">fail</span> ${esc(d.detail||'')}`;}
 async function setBudget(p){const v=$('#budget-'+p).value.trim();await cfgPost({action:'budget',provider:p,value:v?parseInt(v):null});render();}
 async function config(m){const c=await j('/api/config');const provs=[['tavily','Tavily','web + news search (LLM-oriented; returns page content). Free tier ≈1,000 calls/month.'],['finnhub','Finnhub','company news, earnings calendar, basic metrics. Free tier 60 calls/min.'],['brave','Brave Search','web + news search (client not wired yet; key stored for later).'],['searxng','SearXNG','self-hosted meta-search, free fallback. '+esc(c.searxng.url||'')]];
 m.innerHTML=`<div class="card"><h2>Providers</h2><div class="dim" style="font-size:13px;margin-bottom:8px">${c.token_protected?'Dashboard token is set; key changes require it.':'<span class="warn">No dashboard token set: anyone on this network can change these. Set MUNCHKIN_WEB_TOKEN in .env to lock it.</span>'} Keys are stored in <code>.env</code> (mode 600), shown masked, never exposed to the model. Changes apply immediately, no restart.</div>
@@ -346,7 +422,8 @@ ${p!=='searxng'?`<div class="sub" style="margin-top:6px">key: <span class="mono"
 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="key-${p}" type="password" placeholder="paste API key" style="flex:1;min-width:160px;background:#11141a;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px"><button class="btn" style="width:auto" onclick="setKey('${p}')">Save</button>${s.has_key?`<button class="btn" style="width:auto" onclick="clearKey('${p}')">Clear</button>`:''}</div>
 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center"><span class="dim" style="font-size:12px">monthly budget</span><input id="budget-${p}" value="${s.budget??''}" style="width:90px;background:#11141a;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px"><button class="btn" style="width:auto;padding:6px 10px" onclick="setBudget('${p}')">Set</button></div>`:''}
 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn" style="width:auto;padding:8px 12px" onclick="toggleProv('${p}',${!s.enabled_flag})">${s.enabled_flag?'Disable':'Enable'}</button><button class="btn" style="width:auto;padding:8px 12px" onclick="testProv('${p}')">Test</button><span id="test-${p}" class="dim" style="font-size:12px;align-self:center"></span></div></div>`;}).join('')}</div>
-<div class="card"><h2>Search chain</h2><div class="dim" style="font-size:13px">Order of providers for web/news queries. The first with results wins; news queries merge the first two (${c.merge_news?'on':'off'}).</div><div style="display:flex;gap:6px;margin-top:8px"><input id="order" value="${esc(c.order.join(', '))}" style="flex:1;background:#11141a;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px"><button class="btn" style="width:auto" onclick="setOrder()">Save</button></div><div style="margin-top:8px"><button class="btn" style="width:auto;padding:8px 12px" onclick="cfgPost({action:'merge_news',value:${!c.merge_news}}).then(render)">${c.merge_news?'Turn news merge off':'Turn news merge on'}</button></div></div>`;}
+<div class="card"><h2>Model</h2><div class="dim" style="font-size:13px;margin-bottom:8px">Any OpenAI-compatible chat server with tool calling. Read per session, so changes apply to the next session without a restart. Key goes to <code>.env</code> as LLM_API_KEY.</div><div id="llmbox">loading…</div></div>
+<div class="card"><h2>Search chain</h2><div class="dim" style="font-size:13px">Order of providers for web/news queries. The first with results wins; news queries merge the first two (${c.merge_news?'on':'off'}).</div><div style="display:flex;gap:6px;margin-top:8px"><input id="order" value="${esc(c.order.join(', '))}" style="flex:1;background:#11141a;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px"><button class="btn" style="width:auto" onclick="setOrder()">Save</button></div><div style="margin-top:8px"><button class="btn" style="width:auto;padding:8px 12px" onclick="cfgPost({action:'merge_news',value:${!c.merge_news}}).then(render)">${c.merge_news?'Turn news merge off':'Turn news merge on'}</button></div></div>`;llmLoad();}
 async function overview(m){const [o,eq]=await Promise.all([j('/api/overview'),j('/api/equity?range='+range)]);const r=o.risk;$('#now').textContent=o.now.slice(5,16);const d=$('#daemon');d.textContent='daemon '+o.daemon+(o.halted?' · HALT':'');d.className='pill '+(o.daemon==='active'&&!o.halted?'ok':'bad');
 const day=r.daily_pnl,tot=r.virtual_equity-o.starting_capital;
 m.innerHTML=`<div class="card"><div class="kpis">

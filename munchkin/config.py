@@ -84,9 +84,22 @@ class RiskLimits(BaseModel):
     research_min_charts: int = 4           # candidates that must be charted before any entry
 
 
+LLM_PRESETS = {
+    "lmstudio": {"base_url": "http://localhost:1234", "send_reasoning_effort": True, "note": "OpenAI-compatible server built into LM Studio"},
+    "ollama": {"base_url": "http://localhost:11434", "send_reasoning_effort": False, "note": "Ollama's OpenAI-compatible endpoint (/v1)"},
+    "vllm": {"base_url": "http://localhost:8000", "send_reasoning_effort": False, "note": "vLLM OpenAI-compatible server"},
+    "openai": {"base_url": "https://api.openai.com", "send_reasoning_effort": True, "note": "needs LLM_API_KEY"},
+    "openrouter": {"base_url": "https://openrouter.ai/api", "send_reasoning_effort": False, "note": "needs LLM_API_KEY; model like 'qwen/qwen3-235b'"},
+    "anthropic": {"base_url": "https://api.anthropic.com", "send_reasoning_effort": False, "note": "OpenAI-compatibility layer; needs LLM_API_KEY"},
+    "custom": {"base_url": "", "send_reasoning_effort": False, "note": "any /v1/chat/completions server with tool calling"},
+}
+
+
 class LLMSettings(BaseModel):
-    base_url: str = Field(default_factory=lambda: os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234"))
-    model: str = Field(default_factory=lambda: os.environ.get("LMSTUDIO_MODEL", "qwen/qwen3.8-27b"))
+    provider: str = Field(default_factory=lambda: os.environ.get("LLM_PROVIDER", "lmstudio"))
+    base_url: str = Field(default_factory=lambda: os.environ.get("LLM_BASE_URL") or os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234"))
+    model: str = Field(default_factory=lambda: os.environ.get("LLM_MODEL") or os.environ.get("LMSTUDIO_MODEL", "qwen/qwen3.8-27b"))
+    send_reasoning_effort: bool = True     # only OpenAI o-series and LM Studio understand `reasoning_effort`; others may reject it
     reasoning_effort: str = "medium"
     reasoning_by_phase: dict[str, str] = {"reflect": "high", "research": "high", "postmarket": "medium", "premarket": "medium",
                                           "intraday": "medium", "event": "medium", "adhoc": "medium"}
@@ -146,6 +159,30 @@ def _load_toml() -> dict[str, Any]:
         with open(p, "rb") as f:
             return tomllib.load(f)
     return {}
+
+
+LLM_OVERRIDE_FILE = DATA_DIR / "llm.json"
+
+
+def llm_api_key() -> str:
+    """Optional bearer token for hosted providers; read lazily from .env, never exposed to the model."""
+    from dotenv import dotenv_values
+    vals = dotenv_values(ROOT / ".env") if (ROOT / ".env").exists() else {}
+    return (vals.get("LLM_API_KEY") or os.environ.get("LLM_API_KEY") or "").strip()
+
+
+def load_llm_settings() -> LLMSettings:
+    """TOML/env defaults, then dashboard overrides from data/llm.json. Read per session, so changes need no restart."""
+    raw = _load_toml().get("llm", {})
+    s = LLMSettings(**raw)
+    if LLM_OVERRIDE_FILE.exists():
+        try:
+            import json as _json
+            ov = _json.loads(LLM_OVERRIDE_FILE.read_text())
+            s = s.model_copy(update={k: v for k, v in ov.items() if k in LLMSettings.model_fields and v not in (None, "")})
+        except Exception:
+            pass
+    return s
 
 
 def load_settings() -> Settings:
