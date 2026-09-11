@@ -1,7 +1,8 @@
 [project]
 name = "marketmunchkin"
 version = "0.1.0"
-description = "Autonomous LLM trading agent (Alpaca paper) driven by a local LM Studio model"
+license = {text = "MIT"}
+description = "Autonomous LLM trading agent for a cash Alpaca account, driven by a local or hosted model"
 requires-python = ">=3.11"
 dependencies = [
     "alpaca-py>=0.42",

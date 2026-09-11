@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="assets/mascot-256.png" width="150" alt="MarketMunchkin mascot">
+  <img src="docs/hero.jpg" alt="MarketMunchkin" width="100%">
 </p>
-
-<h1 align="center">MarketMunchkin</h1>
 
 <p align="center">
   An autonomous trading agent that runs on your own machine, on your own model, in a cash account.<br>
@@ -10,7 +8,7 @@
 </p>
 
 <p align="center">
-  <b>Local LLM</b> · <b>Alpaca, paper or live</b> · <b>Cash only</b> · <b>Free data sources</b> · <b>Every decision traced</b>
+  <b>Local LLM</b> · <b>Alpaca, paper or live</b> · <b>Cash only</b> · <b>Free data sources</b> · <b>Every decision traced</b> · <b>MIT licensed</b>
 </p>
 
 ![Overview: equity curve with axes, state-of-the-world dials, positions with resting stops, armed entries, the last session's reasoning as a timeline](docs/screenshots/overview.png)
@@ -199,6 +197,10 @@ munchkin baseline --reset                          # re-anchor the virtual accou
 Point `.env` at live keys with `ALPACA_PAPER=false` and review the limits in `munchkin.toml`. The same risk engine,
 daemon and journal apply. Starting in the Defensive style and letting the journal fill up for a few weeks is a
 sensible way in.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Disclaimer
 
