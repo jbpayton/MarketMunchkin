@@ -1122,6 +1122,13 @@ class ToolRegistry:
                 return f"ERROR: expression must be one of {EXPRESSIONS}"
             if expression != "stock" and not (7 <= int(dte_target) <= 60):
                 return "ERROR: dte_target must be 7-60 for option expressions"
+            if expression == "stock":
+                try:
+                    if any(p.get("symbol") == u for p in c.broker.positions()):
+                        return (f"REJECTED: {u} stock is already held; a stock arm on a held name would be dropped by the watcher. "
+                                "For an add-on use an option expression (call / put / call_spread / put_spread), or manage the position with set_exit_levels.")
+                except Exception:
+                    pass
             viol = c.research.gate(u)
             tp, sp, trg = float(target_price), float(stop_price), float(trigger_price)
             if expression in ("stock", "call", "call_spread") and not (sp < trg < tp):

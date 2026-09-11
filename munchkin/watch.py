@@ -197,9 +197,11 @@ class Watcher:
             px = snaps.get(sym, {}).get("price")
             if not px or not_yet(rec, now) or not index_ok(rec, spy_chg):
                 continue
-            if sym in held:
+            if sym in held and (rec.get("expression") or "stock") == "stock":
+                # double-buy protection for stock arms only; an option expression on a held underlying is a deliberate
+                # add-on and is sized against the per-underlying cap when it fires
                 self.entries.disarm(sym)
-                actions.append(f"{sym}: armed entry dropped, position already held")
+                actions.append(f"{sym}: armed stock entry dropped, the stock is already held (an add-on must be an option expression)")
                 continue
             if trigger_hit(rec, float(px)):
                 try:
