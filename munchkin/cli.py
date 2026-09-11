@@ -179,7 +179,12 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         if age_h("duty:new_dossiers") > 1.5:
             j.set("duty:new_dossiers", now.isoformat(timespec="seconds"))
             return "DUTY: find 2 NEW names (not in today's dossiers) from get_setups / get_intraday_setups / movers that fit the regime; research_symbol each; then do the opportunity board including them."
-        return board
+        if age_h("duty:board") > 0.5:
+            j.set("duty:board", now.isoformat(timespec="seconds"))
+            return board
+        return ("DUTY: MONITOR. Check every held and armed name against the tape (get_quotes, screen_intraday) and fresh news; adjust a stop, "
+                "target or arm only if its thesis changed, and say in one line per name why it stands. Do not re-run the full opportunity board "
+                "(it runs every 30 minutes) and do not re-arm entries that are already armed. If nothing changed, say so in three lines and stop.")
 
     def _chores(now: dt.datetime, is_td: bool) -> None:
         """No-LLM housekeeping: IV history snapshots daily, earnings + backtest weekly."""

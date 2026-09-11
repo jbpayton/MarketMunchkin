@@ -82,6 +82,7 @@ class RiskLimits(BaseModel):
     size_mult_speculative: float = 0.5     # per-position cap multiplier when the catalyst is a rumor/unnamed source
     size_mult_no_catalyst: float = 0.35    # ... when there is no identifiable driver (pure technical)
     research_min_charts: int = 4           # candidates that must be charted before any entry
+    research_window_hours: float = 3.0     # evidence (charts, news, dossiers, scans) counts for this long across sessions
     allow_options: bool = True             # style-controlled (Defensive: false)
     allow_spreads: bool = True             # debit verticals (short leg covered in the same order)
     allow_singles: bool = True             # bought calls / puts

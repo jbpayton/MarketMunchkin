@@ -372,3 +372,27 @@ def test_skill_script_runs_in_the_sandbox():
     code, _ = SkillStore().script_source("post-trade-review", "trade_stats.py")
     out = SB.run(code, {"bars": {}, "screener": None, "chains": {}, "fills": None, "trades": None, "equity": None, "ARGS": {}})
     assert "no closed trades yet" in out
+
+
+def test_research_gate_spans_recent_sessions():
+    import datetime as dt
+    from munchkin.research import ResearchTracker
+
+    class FakeJournal:
+        def __init__(self): self.kv = {}
+        def get(self, k, default=None): return self.kv.get(k, default)
+        def set(self, k, v): self.kv[k] = v
+
+    j = FakeJournal()
+    a = ResearchTracker(min_charts=2).attach(j, 3.0)
+    a.note_context(); a.note_screen(); a.note_chart("UBER"); a.note_chart("GD"); a.note_news(["UBER"]); a.note_dossier("UBER")
+    assert a.gate("UBER") == []
+    b = ResearchTracker(min_charts=2).attach(j, 3.0)          # a new session a minute later sees the same evidence
+    assert b.gate("UBER") == [] and "GD" in b.charted and b.screened and b.context_checked
+    old = (dt.datetime.now() - dt.timedelta(hours=4)).isoformat(timespec="seconds")
+    for kind in ("charted", "newsed", "dossiers", "flags"):
+        j.kv["research:state"][kind] = {k: old for k in j.kv["research:state"][kind]}
+    c = ResearchTracker(min_charts=2).attach(j, 3.0)          # four hours later it has all expired
+    assert len(c.gate("UBER")) == 6 and "in the last 3h" in c.gate("UBER")[0]
+    d = ResearchTracker(min_charts=2)                          # no journal: per-session behaviour, no crash
+    d.note_chart("X"); assert "X" in d.charted

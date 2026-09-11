@@ -280,6 +280,7 @@ def make_context(dry_run: bool = False, allow_trading: bool = True, phase: str =
     r = RiskEngine(b, m, j, limits)
     ctx = Context(broker=b, market=m, journal=j, risk=r, settings=settings, dry_run=dry_run, allow_trading=allow_trading, phase=phase)
     ctx.style = style
+    ctx.research.attach(j, limits.research_window_hours)   # evidence from the last few sessions counts toward the gate
     return ctx
 
 

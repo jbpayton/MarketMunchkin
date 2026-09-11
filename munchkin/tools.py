@@ -665,8 +665,9 @@ class ToolRegistry:
                 return "dry run: not saved"
             if len((body or "").strip()) < 300:
                 return "REJECTED: body too short — a note needs the mechanism, how it moves markets, what to watch, and how this book should use it"
-            if not sources or not any(str(x).startswith("http") for x in sources):
-                return "REJECTED: cite at least one URL you actually read (fetch_page/web_search results)"
+            import re as _re
+            if not sources or not any(_re.search(r"https?://|www\.|[a-z0-9-]+\.(gov|org|com|edu|net|io)\b", str(x), _re.I) for x in sources):
+                return f"REJECTED: cite at least one URL or domain you actually read (fetch_page/web_search results); received {[str(x)[:40] for x in sources][:4]}"
             p = KnowledgeBase().save(topic, title, body, [str(x) for x in sources], summary or None)
             c.journal.add_event("knowledge", f"library note saved: {slugify(topic)} ({len(body)} chars)")
             return f"saved {p.name} ({len(body)} chars); it now appears in the Library index of every session"
@@ -1041,7 +1042,7 @@ class ToolRegistry:
         # ---------------- memory
         def record_lesson(text: str, tags: str = "") -> str:
             if len(text) > 400:
-                return "ERROR: a lesson is a rule in one or two sentences (max 400 chars), not a diary entry. Put the narrative in record_note and state the rule here."
+                return f"ERROR: a lesson is a rule in one or two sentences (max 400 chars; this was {len(text)}), not a diary entry. Put the narrative in record_note and state the rule here."
             if c.dry_run or not c.memory_writes:
                 c.journal.add_note(f"[dry-run lesson, not saved] {text}", c.session_id)
                 return "noted (dry-run/read-only sessions do not write lessons)"
@@ -1095,8 +1096,8 @@ class ToolRegistry:
                 return "playbook edits are disabled in this mode"
             if len(new_markdown) < 200:
                 return "ERROR: playbook replacement too short; supply the full revised document."
-            if len(new_markdown) > 7000:
-                return f"ERROR: playbook is {len(new_markdown)} chars; keep it under 7000 (it is injected into every prompt). Consolidate."
+            if len(new_markdown) > 9000:
+                return f"ERROR: playbook is {len(new_markdown)} chars, {len(new_markdown) - 9000} over the 9000 cap (it is injected into every prompt). Drop a whole section rather than trimming words."
             c.journal.update_playbook(new_markdown)
             return "playbook updated (previous version archived)"
 
@@ -1219,13 +1220,31 @@ class ToolRegistry:
             tf = timeframe if timeframe in ("1D", "1W", "1H", "30Min", "15Min", "5Min") else "1D"
             for sym in syms:
                 try:
+                    if sym.startswith("^") or sym.endswith("=F") or sym.endswith("-USD"):
+                        # index / futures / crypto tickers live on yfinance, not Alpaca
+                        import yfinance as yf
+                        n = max(30, min(int(bars), 1500))
+                        period = "2y" if n > 250 else "1y" if n > 120 else "6mo"
+                        raw = yf.download(sym, period=period, interval="1d" if tf in ("1D", "1W") else "1h", progress=False, auto_adjust=False)
+                        if raw is not None and not raw.empty:
+                            if hasattr(raw.columns, "levels"):
+                                raw.columns = [str(cc[0]).lower() for cc in raw.columns]
+                            else:
+                                raw.columns = [str(cc).lower() for cc in raw.columns]
+                            df = raw.rename(columns={"adj close": "adj_close"})[[cc for cc in ("open", "high", "low", "close", "volume") if cc in raw.columns]].tail(n)
+                            df.index = pd.DatetimeIndex(df.index).tz_localize(None) if getattr(df.index, "tz", None) is None else pd.DatetimeIndex(df.index).tz_convert("America/New_York").tz_localize(None)
+                            dataset["bars"][sym] = df
+                        else:
+                            dataset["bars"][sym] = pd.DataFrame({"error": [f"no yfinance data for {sym}"]})
+                        continue
                     df = c.market.bars(sym, tf, max(30, min(int(bars), 1500)))
                     if not df.empty:
                         df = df.copy()
                         if tf in ("1D", "1W"):
                             f = screen_frame(df)
                             df = df.join(f.drop(columns=[x for x in f.columns if x in df.columns], errors="ignore"))
-                        df.index = df.index.tz_convert("America/New_York")
+                        # tz-naive New York time: comparisons with plain dates and strings just work in agent code
+                        df.index = df.index.tz_convert("America/New_York").tz_localize(None)
                         dataset["bars"][sym] = df
                         c.research.note_chart(sym)
                 except Exception as e:
@@ -1321,7 +1340,7 @@ class ToolRegistry:
                  _schema({"name": _p("name", "string", "slug, e.g. earnings-runner"), "description": _p("description", "string", "one sentence: when to use it"),
                           "body": _p("body", "string", "the procedure, markdown"), "tags": _p("tags", "array", "optional tags", items={"type": "string"})}, ["name", "description", "body"]), save_skill)
 
-        self.add("run_analysis", "Run your own pandas/numpy/scipy/pandas_ta code (sandboxed: no network, no files, no credentials). Preloaded variables: bars (dict symbol -> OHLCV DataFrame with vwap/trade_count and, for daily, the screener indicator columns), screener (the full daily table, index=symbol), chains (dict underlying -> option chain DataFrame with bid/ask/iv/greeks/oi), fills, trades, equity (your own history), plus pd, np, stats, ta (pandas_ta). print() results or end with an expression. Use for anything the fixed tools do not compute: custom indicators, correlations/beta, seasonality, event studies, expected-move vs realized, sizing simulations, quick backtests of a rule.",
+        self.add("run_analysis", "Run your own pandas/numpy/scipy/pandas_ta code (sandboxed: no network, no files, no credentials). Preloaded variables: bars (dict symbol -> OHLCV DataFrame, index = New York time without tz so plain date strings compare; daily frames carry the screener indicator columns; index/futures/crypto tickers such as ^VIX, ^TNX, CL=F, BTC-USD come from yfinance), screener (the full daily table, index=symbol), chains (dict underlying -> option chain DataFrame with bid/ask/iv/greeks/oi), fills, trades, equity (your own history), plus pd, np, stats, ta (pandas_ta). print() results or end with an expression. Use for anything the fixed tools do not compute: custom indicators, correlations/beta, seasonality, event studies, expected-move vs realized, sizing simulations, quick backtests of a rule.",
                  _schema({"code": _p("code", "string", "python code"), "symbols": _p("symbols", "array", "symbols to load into `bars` (max 25)", items={"type": "string"}),
                           "timeframe": _p("timeframe", "string", "1D (default) | 1W | 1H | 30Min | 15Min | 5Min"), "bars": _p("bars", "integer", "bars per symbol (default 260, max 1500)"),
                           "include_screener": _p("include_screener", "boolean", "load the screener table (default true)"),
