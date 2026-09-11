@@ -239,12 +239,23 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         except Exception as e:
             logging.warning("baseline reset failed: %s", e)
 
-    from .styles import effective_watch, get_style
+    from .styles import effective_limits, effective_watch, get_style
+    current_style = None
     while True:
         now = now_et()
         today = now.date().isoformat()
-        W = effective_watch(SETTINGS.watch, get_style(j))
+        style = get_style(j)
+        W = effective_watch(SETTINGS.watch, style)
         watcher.cfg = W
+        if style != current_style:
+            # the style switch applies to the watcher too: armed entries that fire between sessions are checked
+            # against the new caps, instrument flags and breaker, not the ones the daemon booted with
+            ctx.risk.L = effective_limits(SETTINGS.risk, style)
+            ctx.settings = SETTINGS.model_copy(update={"risk": ctx.risk.L})
+            ctx.style = style
+            if current_style is not None:
+                logging.info("trading style changed %s -> %s; watcher limits updated", current_style, style)
+            current_style = style
         if today not in trading_day_cache:
             try:
                 trading_day_cache[today] = ctx.broker.is_trading_day(now.date())
