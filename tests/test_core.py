@@ -62,7 +62,7 @@ def test_research_gate_and_grades():
     v = t.gate("INTC")
     assert any("get_market_context" in x for x in v) and any("broad scan" in x for x in v)
     t.note_context(); t.note_screen(); t.note_chart("intc"); t.note_chart("SIG")
-    assert t.gate("INTC") == [f"INTC has not been grounded in news this session (get_news with symbols=[INTC] or web_search mentioning INTC)"]
+    assert t.gate("INTC") == [f"INTC has not been grounded in news in the last 3h (get_news with symbols=[INTC] or web_search mentioning INTC)"]
     t.note_search("why is INTC up today")
     assert t.gate("INTC") == []
     assert t.gate("NVDA")  # not charted / not grounded
