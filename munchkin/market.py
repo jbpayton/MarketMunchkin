@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
 import logging
 import re
 import warnings
@@ -32,12 +33,70 @@ _TF = {
 }
 
 
+class FeedDegraded(RuntimeError):
+    """Raised instantly while the Alpaca data feed breaker is open."""
+
+
+class FeedBreaker:
+    """Fast-fail Alpaca data calls after repeated backend timeouts / 5xx, instead of waiting ~20 s on every call.
+    Closes again after `cooldown_s`; one successful call resets it."""
+
+    def __init__(self, threshold: int = 2, cooldown_s: float = 90.0) -> None:
+        self.threshold, self.cooldown_s = threshold, cooldown_s
+        self.fails, self.until, self.last_err = 0, 0.0, ""
+
+    @property
+    def open(self) -> bool:
+        return time.time() < self.until
+
+    def check(self) -> None:
+        if self.open:
+            raise FeedDegraded(f"Alpaca data feed degraded ({self.last_err}); fast-failing until {dt.datetime.fromtimestamp(self.until):%H:%M:%S}; quotes fall back to yfinance")
+
+    def ok(self) -> None:
+        self.fails = 0
+
+    def fail(self, e: Exception) -> None:
+        msg = str(e)
+        if any(k in msg for k in ("timeout", "Internal Server Error", "502", "503", "504")):
+            self.fails += 1
+            self.last_err = msg.strip()[:80]
+            if self.fails >= self.threshold and not self.open:
+                self.until = time.time() + self.cooldown_s
+                log.warning("data feed breaker opened for %.0fs after %d failures: %s", self.cooldown_s, self.fails, self.last_err)
+
+
+class GuardedClient:
+    """Transparent proxy: every method call consults the breaker first and reports the outcome to it."""
+
+    def __init__(self, client: Any, breaker: FeedBreaker) -> None:
+        self._client, self._breaker = client, breaker
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._client, name)
+        if not callable(attr):
+            return attr
+
+        def call(*a: Any, **k: Any) -> Any:
+            self._breaker.check()
+            try:
+                r = attr(*a, **k)
+            except Exception as e:
+                self._breaker.fail(e)
+                raise
+            self._breaker.ok()
+            return r
+        return call
+
+
 class Market:
     def __init__(self) -> None:
         key, secret, _ = alpaca_credentials()
-        self.stocks = StockHistoricalDataClient(key, secret)
-        self.options = OptionHistoricalDataClient(key, secret)
-        self.newsc = NewsClient(key, secret)
+        # one breaker for the three data clients: they share a backend, and when it times out every call costs ~20 s
+        self.breaker = FeedBreaker()
+        self.stocks = GuardedClient(StockHistoricalDataClient(key, secret), self.breaker)
+        self.options = GuardedClient(OptionHistoricalDataClient(key, secret), self.breaker)
+        self.newsc = GuardedClient(NewsClient(key, secret), self.breaker)
         self.scr = ScreenerClient(key, secret)
         self._fund_cache: dict[str, tuple[dt.date, dict]] = {}
 

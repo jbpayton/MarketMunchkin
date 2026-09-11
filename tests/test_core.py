@@ -407,3 +407,28 @@ def test_broker_clock_falls_back_when_alpaca_errors():
     b.is_trading_day = lambda d: True
     c = b.clock()
     assert c["degraded"] is True and isinstance(c["is_open"], bool) and "Internal Server Error" in c["error"]
+
+
+def test_feed_breaker_fast_fails_after_repeated_timeouts():
+    from munchkin.market import FeedBreaker, FeedDegraded, GuardedClient
+
+    class Flaky:
+        calls = 0
+        def get(self, x):
+            Flaky.calls += 1
+            raise RuntimeError('{"message":"backend request timeout"}')
+    b = FeedBreaker(threshold=2, cooldown_s=60)
+    g = GuardedClient(Flaky(), b)
+    for _ in range(2):
+        try: g.get(1)
+        except RuntimeError: pass
+    assert b.open and Flaky.calls == 2
+    try:
+        g.get(1); assert False, "should fast-fail"
+    except FeedDegraded as e:
+        assert "yfinance" in str(e)
+    assert Flaky.calls == 2            # the third call never reached the client
+    b.until = 0                         # cooldown over
+    class Fine:
+        def get(self, x): return "ok"
+    assert GuardedClient(Fine(), b).get(1) == "ok" and b.fails == 0
