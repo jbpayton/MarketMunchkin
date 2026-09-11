@@ -65,7 +65,7 @@ def status() -> None:
 
 
 @app.command()
-def run(phase: str = typer.Option("intraday", help="premarket | intraday | event | postmarket | research | reflect | adhoc"),
+def run(phase: str = typer.Option("intraday", help="premarket | intraday | event | postmarket | research | reflect | study | adhoc"),
         task: Optional[str] = typer.Option(None, help="extra instruction for the agent"),
         dry_run: bool = typer.Option(False, help="validate + journal orders but do not submit"),
         no_trade: bool = typer.Option(False, help="disable order tools entirely"),

@@ -28,7 +28,8 @@ def asset(name: str):
     f = ASSETS / name
     if not f.exists():
         raise HTTPException(404)
-    return FileResponse(str(f), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+    st = f.stat()
+    return FileResponse(str(f), media_type="image/png", headers={"Cache-Control": "no-cache, max-age=0, must-revalidate", "ETag": f'"{int(st.st_mtime)}-{st.st_size}"'})
 _TOKEN = os.environ.get("MUNCHKIN_WEB_TOKEN", "")
 _cache: dict[str, tuple[float, Any]] = {}
 _ctx = None
@@ -607,8 +608,8 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 4px;b
 .btn.danger{border-color:var(--dn);color:var(--dn);background:#2a1620}
 .confirm{margin-top:10px;border:1px solid var(--warn);border-radius:12px;padding:10px;background:#221c12}
 </style></head><body>
-<link rel="icon" type="image/png" href="/assets/mascot-48.png">
-<header><h1><img src="/assets/mascot-48.png" alt="" style="width:28px;height:28px;image-rendering:pixelated;vertical-align:middle"> MarketMunchkin <small id="now"></small><small id="daemon" class="pill"></small></h1>
+<link rel="icon" type="image/png" href="/assets/mascot-48.png?v=4">
+<header><h1><img src="/assets/mascot-48.png?v=4" alt="" style="width:28px;height:28px;image-rendering:pixelated;vertical-align:middle"> MarketMunchkin <small id="now"></small><small id="daemon" class="pill"></small></h1>
 <nav><button data-tab="overview" class="on">Overview</button><button data-tab="sessions">Sessions</button><button data-tab="journal">Journal</button><button data-tab="brain">Brain</button><button data-tab="config">Config</button></nav></header>
 <main id="main"></main>
 <script>
