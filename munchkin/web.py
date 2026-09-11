@@ -81,6 +81,22 @@ def _daemon_status() -> str:
 def api_overview():
     c = ctx()
     j = c.journal
+    try:
+        data = _overview_build(c, j)
+        _cache["overview_last_good"] = (time.time(), data)
+        return data
+    except Exception as e:
+        hit = _cache.get("overview_last_good")
+        if not hit:
+            raise
+        stale = dict(hit[1])
+        stale["stale"] = True
+        stale["stale_since"] = dt.datetime.fromtimestamp(hit[0]).strftime("%H:%M")
+        stale["broker_error"] = f"{type(e).__name__}: {str(e)[:160]}"
+        return stale
+
+
+def _overview_build(c, j):
 
     def build():
         st = c.risk.state().as_dict()

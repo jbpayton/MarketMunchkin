@@ -396,3 +396,14 @@ def test_research_gate_spans_recent_sessions():
     assert len(c.gate("UBER")) == 6 and "in the last 3h" in c.gate("UBER")[0]
     d = ResearchTracker(min_charts=2)                          # no journal: per-session behaviour, no crash
     d.note_chart("X"); assert "X" in d.charted
+
+
+def test_broker_clock_falls_back_when_alpaca_errors():
+    from munchkin.broker import Broker
+
+    class Boom:
+        def get_clock(self): raise RuntimeError("Internal Server Error")
+    b = Broker.__new__(Broker); b.tc = Boom()
+    b.is_trading_day = lambda d: True
+    c = b.clock()
+    assert c["degraded"] is True and isinstance(c["is_open"], bool) and "Internal Server Error" in c["error"]

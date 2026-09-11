@@ -31,8 +31,30 @@ class Broker:
     def account(self) -> dict[str, Any]:
         return to_plain(self.tc.get_account())
 
+    _last_clock: dict[str, Any] | None = None
+
     def clock(self) -> dict[str, Any]:
-        return to_plain(self.tc.get_clock())
+        """Broker clock; if the endpoint is down (it has returned 500s during otherwise-normal trading), derive the
+        state from New York time and the last good answer so sessions and the dashboard keep working."""
+        try:
+            c = to_plain(self.tc.get_clock())
+            c["degraded"] = False
+            Broker._last_clock = c
+            return c
+        except Exception as e:
+            from .util import now_et
+            now = now_et()
+            weekday = now.weekday() < 5
+            try:
+                weekday = weekday and self.is_trading_day(now.date())
+            except Exception:
+                pass
+            is_open = weekday and dt.time(9, 30) <= now.time() < dt.time(16, 0)
+            base = dict(Broker._last_clock or {})
+            base.update({"timestamp": now.isoformat(), "is_open": is_open, "degraded": True, "error": str(e)[:120]})
+            base.setdefault("next_open", None)
+            base.setdefault("next_close", None)
+            return base
 
     def calendar(self, start: dt.date, end: dt.date) -> list[dict[str, Any]]:
         return to_plain(self.tc.get_calendar(GetCalendarRequest(start=start, end=end)))

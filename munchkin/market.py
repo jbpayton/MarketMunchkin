@@ -55,6 +55,10 @@ class Market:
         except Exception as e:
             log.warning("delayed sip snapshot failed: %s", e)
         out: dict[str, dict[str, Any]] = {}
+        if not iex and not dl and symbols:
+            # both Alpaca feeds are down (seen as "backend request timeout" on an otherwise normal day): yfinance keeps
+            # prices flowing for the watcher, armed entries and the dashboard, tagged so nobody mistakes it for the tape
+            return self._snapshots_yfinance(symbols)
         for s in symbols:
             a, b = iex.get(s), dl.get(s)
             if a is None and b is None:
@@ -85,6 +89,27 @@ class Market:
                 "chg_pct": None if not (price and prev_close) else round((price / prev_close - 1) * 100, 2),
             }
             out[s] = rec
+        return out
+
+    def _snapshots_yfinance(self, symbols: list[str], budget_s: float = 25.0) -> dict[str, dict[str, Any]]:
+        import time as _t
+        import yfinance as yf
+        out: dict[str, dict[str, Any]] = {}
+        t0 = _t.time()
+        for s in symbols:
+            if _t.time() - t0 > budget_s:
+                out[s] = {"symbol": s, "error": "fallback quote budget exhausted"}
+                continue
+            try:
+                fi = yf.Ticker(s.replace(".", "-")).fast_info
+                price, prev = fnum(fi.get("last_price")), fnum(fi.get("previous_close"))
+                out[s] = {"symbol": s, "price": price, "price_time": now_et().strftime("%H:%M"), "price_src": "yfinance-fallback",
+                          "bid": None, "ask": None, "quote_time": None, "day_open": fnum(fi.get("open")), "day_high": fnum(fi.get("day_high")),
+                          "day_low": fnum(fi.get("day_low")), "day_vol": int(fi.get("last_volume") or 0) or None, "prev_close": prev,
+                          "chg_pct": None if not (price and prev) else round((price / prev - 1) * 100, 2)}
+            except Exception as e:
+                out[s] = {"symbol": s, "error": f"no data ({str(e)[:60]})"}
+        log.warning("snapshots served by yfinance fallback for %d symbols", len(symbols))
         return out
 
     def price(self, symbol: str) -> float | None:
