@@ -73,6 +73,14 @@ def _lessons_block(j: Journal, n: int = 20) -> str:
     return "\n".join(f"- {l['text'][:300]}" for l in ls)
 
 
+def _skills_block() -> str:
+    try:
+        from .skills import SkillStore
+        return SkillStore().index_text()
+    except Exception as e:
+        return f"(skills unavailable: {e})"
+
+
 def _library_block() -> str:
     try:
         from .knowledge import KnowledgeBase
@@ -182,6 +190,11 @@ and how hard you press. Risk-off, weak breadth or deteriorating credit -> fewer,
 names, defined-risk expressions. Risk-on with broad participation and small caps leading -> hunt breakouts in the leading sectors.
 Rising rates or a rising dollar -> avoid long-duration growth; falling VIX with firm credit -> lean in. When a dial moved sharply,
 search the news for the driver before trading anything correlated with it.
+
+## Skills (procedures; load_skill <name> and follow it when the situation matches)
+{_skills_block()}
+Print days -> print-day. Expressing an idea -> armed-entries and option-expression. Inside 2 DTE -> expiry-and-assignment.
+The first 30 minutes -> opening-range. Post-market -> post-trade-review. A proven procedure can be promoted with save_skill (draft until approved).
 
 ## Library (durable notes from study sessions; get_knowledge <slug> for the full note)
 {_library_block()}

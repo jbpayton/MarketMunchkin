@@ -119,7 +119,7 @@ The active style applies from the next session.
 - **Options.** Chains with greeks, ATM IV by expiry, IV versus realized, the straddle-implied expected move,
   25-delta skew, open-interest walls, and a stored IV history. Budget-aware contract resolution for singles and
   verticals; spreads are managed on net value.
-- **Sandboxed analysis.** `run_analysis` lets the model write pandas / numpy / scipy / pandas_ta code that runs
+- **Sandboxed analysis.** `run_analysis` (and skill scripts) let the model run pandas / numpy / scipy / pandas_ta code that runs
   in a separate `python -I -S` interpreter with no credentials, CPU and memory limits, a timeout and an AST
   allowlist.
 - **Journal.** SQLite memory: sessions with full traces, decisions and rejections, fills, round-trip trades,
@@ -133,6 +133,25 @@ The active style applies from the next session.
 - **Providers.** SearXNG for search, optional Tavily (search and a fetch fallback for sites that block bots),
   Finnhub (news, earnings calendar) and StockTwits (social buzz), all on free tiers with monthly budgets,
   managed from the Config tab. Keys go to `.env`, never to the model.
+
+## Skills
+
+Skills are packaged procedures the agent loads on demand, in the open Agent Skills format: a folder with a `SKILL.md`
+(front matter with `name` and `description`, then the procedure), optional `scripts/*.py` that run in the analysis
+sandbox with the same preloaded data as `run_analysis` plus an `ARGS` dict, and optional `resources/` reference files.
+Only the index (name and description) sits in the system prompt; bodies load with `load_skill` when the situation
+matches, so they cost almost nothing until used.
+
+Six ship in `skills/`: **print-day** (before, at and after a CPI/PPI/payrolls/FOMC release, with an event-study
+script), **option-expression** (single versus vertical by IV/RV, strikes, sizing and exits, with payoff arithmetic),
+**armed-entries** (triggers, chase limits, time and tape filters), **expiry-and-assignment**, **opening-range** (first
+thirty minutes, with a script that reads gap, range, VWAP and relative volume), and **post-trade-review** (grading a
+closed trade without overfitting, with a book-statistics script).
+
+The agent can promote a proven procedure with `save_skill`. Those land in `data/skills/` as drafts and only become
+active after you approve them on the Brain page, where every skill can also be enabled or disabled. Skills are
+instructions, not permissions: the fixed rules and the risk limits live in code and no skill can loosen them, and
+skill scripts run in the sandbox without credentials or network.
 
 ## Quick start
 

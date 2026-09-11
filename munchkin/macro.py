@@ -167,7 +167,7 @@ def fomc_calendar() -> str:
         txt = trafilatura.extract(r.text, include_tables=True) or ""
         year = str(dt.date.today().year)
         i = txt.find(year)
-        chunk = re.sub(r"\s+", " ", txt[i:i + 1400]) if i >= 0 else txt[:800]
+        chunk = re.sub(r"\s+", " ", txt[i:i + 3200]) if i >= 0 else txt[:1200]
         return f"SOURCE: federalreserve.gov FOMC calendar\n{chunk}"
 
     return _cached("fomccal", 24 * 3600, fetch)
@@ -177,18 +177,32 @@ _MONTHS = {m: i for i, m in enumerate(["January", "February", "March", "April", 
 
 
 def fomc_dates(n: int = 6) -> list[str]:
-    """Decision days (last day of each meeting) parsed from the Fed's calendar page, ISO dates, this year onward."""
-    txt = fomc_calendar()
-    year, last_mon, out = dt.date.today().year, 0, []
-    for m in re.finditer(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:\s*[-–/]\s*(?:[A-Za-z]+\s+)?(\d{1,2}))?", txt):
-        mon = _MONTHS[m.group(1)]
-        if mon < last_mon:
-            year += 1
-        last_mon = mon
-        try:
-            out.append(dt.date(year, mon, int(m.group(3) or m.group(2))).isoformat())
-        except ValueError:
+    """Decision days (last day of each scheduled meeting) from the Fed's calendar page markup, this year and next.
+    Reads the HTML directly: the readable-text extraction drops meetings that have no minutes yet, i.e. the future ones."""
+    def fetch():
+        r = httpx.get("https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", headers={"User-Agent": BROWSER_UA}, timeout=15)
+        return r.text
+    html = _cached("fomchtml", 24 * 3600, fetch)
+    this_year = dt.date.today().year
+    panels = [(int(m.group(1)), m.end()) for m in re.finditer(r"(20\d\d) FOMC Meetings", html)]
+    out: list[str] = []
+    for k, (year, pos) in enumerate(panels):
+        if year not in (this_year, this_year + 1):
             continue
+        seg = html[pos:panels[k + 1][1] if k + 1 < len(panels) else len(html)]
+        for mm in re.finditer(r'fomc-meeting__month[^>]*>\s*<strong>([^<]+)</strong>\s*</div>\s*<div class="fomc-meeting__date[^>]*>([^<]+)<', seg):
+            months, days = mm.group(1).strip(), mm.group(2).strip()
+            if "notation" in days.lower():
+                continue
+            mon_name = months.split("/")[-1].strip()[:3].lower()
+            mon = next((v for k2, v in _MONTHS.items() if k2[:3].lower() == mon_name), None)
+            day_m = re.findall(r"\d{1,2}", days)
+            if not mon or not day_m:
+                continue
+            try:
+                out.append(dt.date(year, mon, int(day_m[-1])).isoformat())
+            except ValueError:
+                continue
     return sorted(set(out))[:n]
 
 

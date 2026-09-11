@@ -1,0 +1,25 @@
+Upcoming scheduled releases as fetched on 2026-09-11 (verify live with get_economic_calendar)
+
+SOURCE: bls.gov release schedules
+2026-09-11 (Fri) 08:30 AM ET: CPI
+2026-09-11 (Fri) 08:30 AM ET: Real Earnings
+2026-09-29 (Tue) 10:00 AM ET: JOLTS
+2026-10-02 (Fri) 08:30 AM ET: Employment Situation (jobs)
+2026-10-14 (Wed) 08:30 AM ET: CPI
+2026-10-14 (Wed) 08:30 AM ET: Real Earnings
+2026-10-15 (Thu) 08:30 AM ET: PPI
+2026-10-30 (Fri) 08:30 AM ET: Employment Cost Index
+2026-11-03 (Tue) 10:00 AM ET: JOLTS
+2026-11-05 (Thu) 08:30 AM ET: Productivity
+2026-11-06 (Fri) 08:30 AM ET: Employment Situation (jobs)
+2026-11-10 (Tue) 08:30 AM ET: CPI
+2026-11-10 (Tue) 08:30 AM ET: Real Earnings
+2026-11-13 (Fri) 08:30 AM ET: PPI
+2026-12-01 (Tue) 10:00 AM ET: JOLTS
+2026-12-04 (Fri) 08:30 AM ET: Employment Situation (jobs)
+2026-12-08 (Tue) 08:30 AM ET: Productivity
+2026-12-10 (Thu) 08:30 AM ET: CPI
+2026-12-10 (Thu) 08:30 AM ET: Real Earnings
+2026-12-15 (Tue) 08:30 AM ET: PPI
+
+FOMC decision days (federalreserve.gov calendar): 2026-09-16, 2026-10-28, 2026-12-09, 2027-01-27, 2027-03-17, 2027-04-28, 2027-06-09, 2027-07-28, 2027-09-15, 2027-10-27, 2027-12-08

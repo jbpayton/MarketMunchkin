@@ -311,3 +311,64 @@ def test_context_plan_scales_with_window(monkeypatch):
     monkeypatch.setattr(llm, "detect_context_tokens", lambda s: (None, "server does not report a context size"))
     u = llm.context_plan(LLMSettings(context_tokens=0))
     assert u["effective_chars"] == u["configured_chars"] and "unknown" in u["warning"]
+
+
+def _write_skill(root, name, body="x" * 400, desc="A test skill.", extra=""):
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n{extra}---\n{body}\n")
+    return d
+
+
+def test_skill_store_loads_validates_and_gates(tmp_path):
+    from munchkin.skills import SkillStore, MAX_BODY
+    repo, agent, state = tmp_path / "skills", tmp_path / "data" / "skills", tmp_path / "data" / "skills.json"
+    d = _write_skill(repo, "print-day")
+    (d / "scripts").mkdir(); (d / "scripts" / "event_study.py").write_text("print(ARGS)\n")
+    (d / "resources").mkdir(); (d / "resources" / "dates.txt").write_text("2026-09-11 CPI\n")
+    _write_skill(repo, "too-big", body="y" * (MAX_BODY + 1))
+    _write_skill(repo, "Bad_Name")
+    st = SkillStore(repo, agent, state)
+    names = [s.name for s in st.all()]
+    assert names == ["print-day"] and len(st.errors) == 2
+    assert "print-day: A test skill. [scripts: event_study.py]" in st.index_text()
+    code, err = st.script_source("print-day", "event_study.py"); assert code.startswith("print(") and err == ""
+    assert st.script_source("print-day", "../SKILL.md")[0] is None
+    assert st.resource_text("print-day", "dates.txt").startswith("2026-09-11")
+    assert "no resource" in st.resource_text("print-day", "../../SKILL.md")
+    # agent draft: not active until approved; disable/enable; editing an approved skill returns it to draft
+    assert st.save_draft("bad name", "d", "z" * 400).startswith("REJECTED")
+    assert st.save_draft("print-day", "d", "z" * 400).startswith("REJECTED")      # cannot shadow an operator skill
+    assert st.save_draft("earnings-runner", "Runs into earnings.", "z" * 400).startswith("created draft")
+    s = st.get("earnings-runner"); assert s.source == "agent" and s.status == "draft"
+    assert "earnings-runner" not in st.index_text()
+    assert st.script_source("earnings-runner", "x.py")[0] is None
+    assert st.approve("earnings-runner") and st.get("earnings-runner").status == "active" and "earnings-runner" in st.index_text()
+    assert st.set_enabled("earnings-runner", False) and not st.get("earnings-runner").enabled and "earnings-runner" not in st.index_text()
+    assert st.save_draft("earnings-runner", "Runs into earnings.", "w" * 400).startswith("updated draft") and st.get("earnings-runner").status == "draft"
+    assert st.delete_draft("earnings-runner") and st.get("earnings-runner") is None
+    assert not st.approve("print-day")     # operator skills are not "approved", they are active by construction
+
+
+def test_bundled_skills_are_valid_and_scripts_pass_the_sandbox_allowlist():
+    from munchkin import sandbox as SB
+    from munchkin.skills import SkillStore
+    st = SkillStore()
+    skills = {s.name: s for s in st.all()}
+    assert st.errors == [] and {"print-day", "option-expression", "armed-entries", "expiry-and-assignment", "opening-range", "post-trade-review"} <= set(skills)
+    for s in skills.values():
+        for sc in s.scripts:
+            code, err = st.script_source(s.name, sc)
+            assert err == "" and SB.validate(code) is None, f"{s.name}/{sc}: {SB.validate(code)}"
+
+
+def test_skill_script_runs_in_the_sandbox():
+    from munchkin import sandbox as SB
+    from munchkin.skills import SkillStore
+    code, _ = SkillStore().script_source("option-expression", "vertical_math.py")
+    out = SB.run(code, {"bars": {}, "screener": None, "chains": {}, "fills": None, "trades": None, "equity": None,
+                        "ARGS": {"type": "C", "long_strike": 72, "short_strike": 74, "long_mid": 1.99, "short_mid": 1.06, "spot": 72.99, "expected_move_pct": 8.4}})
+    assert "debit 0.93 = $93.0 risk, max gain $107.0" in out and "breakeven 72.93" in out
+    code, _ = SkillStore().script_source("post-trade-review", "trade_stats.py")
+    out = SB.run(code, {"bars": {}, "screener": None, "chains": {}, "fills": None, "trades": None, "equity": None, "ARGS": {}})
+    assert "no closed trades yet" in out

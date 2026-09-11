@@ -1204,8 +1204,7 @@ class ToolRegistry:
         self.add("disarm_entry", "Cancel an armed conditional entry.", _schema({"symbol": _p("symbol", "string", "ticker"), "reason": _p("reason", "string", "why")}, ["symbol", "reason"]), disarm_entry)
 
         # ---------------- free-form quantitative analysis (sandboxed pandas)
-        def run_analysis(code: str, symbols: list[str] | None = None, timeframe: str = "1D", bars: int = 260,
-                         include_screener: bool = True, option_underlyings: list[str] | None = None) -> str:
+        def _build_dataset(symbols: list[str] | None, timeframe: str, bars: int, include_screener: bool, option_underlyings: list[str] | None) -> dict[str, Any]:
             import pandas as pd
             from .analytics import screen_frame
             dataset: dict[str, Any] = {"bars": {}, "screener": None, "chains": {}, "fills": None, "trades": None, "equity": None}
@@ -1242,7 +1241,78 @@ class ToolRegistry:
                 dataset["equity"] = pd.DataFrame(c.journal.equity_series(limit=20000))
             except Exception:
                 pass
+            return dataset
+
+        def run_analysis(code: str, symbols: list[str] | None = None, timeframe: str = "1D", bars: int = 260,
+                         include_screener: bool = True, option_underlyings: list[str] | None = None) -> str:
+            dataset = _build_dataset(symbols, timeframe, bars, include_screener, option_underlyings)
             return SB.run(code, dataset, timeout_s=40, max_chars=7500)
+
+        # ---------------- skills: packaged procedures, loaded on demand
+        def list_skills() -> str:
+            from .skills import SkillStore
+            st = SkillStore()
+            rows = st.all()
+            if not rows:
+                return "(no skills installed)"
+            out = [f"- {s.name} [{s.source}, {s.status}{'' if s.enabled else ', disabled'}]: {s.description}"
+                   + (f" scripts: {', '.join(s.scripts)}" if s.scripts else "") + (f" resources: {', '.join(s.resources)}" if s.resources else "") for s in rows]
+            if st.errors:
+                out.append("invalid: " + "; ".join(st.errors))
+            return "\n".join(out)
+
+        self.add("list_skills", "List installed skills (procedures) with status; active ones are also indexed in your system prompt.", _schema({}, []), list_skills)
+
+        def load_skill(name: str) -> str:
+            from .skills import SkillStore
+            s = SkillStore().get(name)
+            if not s:
+                return f"no skill '{name}' (list_skills)"
+            if s.status != "active" or not s.enabled:
+                return f"skill '{name}' is {s.status}{'' if s.enabled else ' and disabled'}; only approved, enabled skills may be followed"
+            extra = (f"\n\nScripts (run_skill_script): {', '.join(s.scripts)}" if s.scripts else "") + (f"\nResources (get_skill_resource): {', '.join(s.resources)}" if s.resources else "")
+            return f"# {s.name}: {s.description}\n\n{s.body}{extra}"
+
+        self.add("load_skill", "Load a skill's full procedure. Do this before following it; the index only carries the description.",
+                 _schema({"name": _p("name", "string", "skill name (slug)")}, ["name"]), load_skill)
+
+        def get_skill_resource(name: str, file: str) -> str:
+            from .skills import SkillStore
+            return SkillStore().resource_text(name, file)
+
+        self.add("get_skill_resource", "Read a reference file shipped with a skill.",
+                 _schema({"name": _p("name", "string", "skill name"), "file": _p("file", "string", "resource file name")}, ["name", "file"]), get_skill_resource)
+
+        def run_skill_script(name: str, script: str, args: dict[str, Any] | None = None, symbols: list[str] | None = None, timeframe: str = "1D",
+                             bars: int = 260, option_underlyings: list[str] | None = None) -> str:
+            from .skills import SkillStore
+            code, err = SkillStore().script_source(name, script)
+            if code is None:
+                return err
+            dataset = _build_dataset(symbols, timeframe, bars, True, option_underlyings)
+            dataset["ARGS"] = dict(args or {})
+            c.journal.add_event("skill", f"{name}/{script} run with {json.dumps(dataset['ARGS'])[:160]}")
+            return SB.run(code, dataset, timeout_s=40, max_chars=7500)
+
+        self.add("run_skill_script", "Run a script shipped with a skill in the analysis sandbox. It sees the same preloaded variables as run_analysis (bars, screener, chains, fills, trades, equity) plus ARGS. Pass symbols/timeframe/bars when the script needs price data.",
+                 _schema({"name": _p("name", "string", "skill name"), "script": _p("script", "string", "script file name, e.g. event_study.py"),
+                          "args": _p("args", "object", "arguments for the script (see the skill body)"),
+                          "symbols": _p("symbols", "array", "symbols to load bars for", items={"type": "string"}), "timeframe": _p("timeframe", "string", "1D | 1H | 15Min | 5Min"),
+                          "bars": _p("bars", "integer", "bars per symbol"), "option_underlyings": _p("option_underlyings", "array", "load option chains for these", items={"type": "string"})},
+                         ["name", "script"]), run_skill_script)
+
+        def save_skill(name: str, description: str, body: str, tags: list[str] | None = None) -> str:
+            from .skills import SkillStore
+            if c.dry_run:
+                return "dry run: not saved"
+            res = SkillStore().save_draft(name, description, body, tags)
+            if not res.startswith("REJECTED"):
+                c.journal.add_event("skill", f"draft skill {name} saved by the agent (awaiting operator approval)")
+            return res
+
+        self.add("save_skill", "Promote a proven, reusable procedure into a draft skill (trigger, steps, thresholds, exit; 300-6000 chars). The operator approves it on the dashboard before it becomes active.",
+                 _schema({"name": _p("name", "string", "slug, e.g. earnings-runner"), "description": _p("description", "string", "one sentence: when to use it"),
+                          "body": _p("body", "string", "the procedure, markdown"), "tags": _p("tags", "array", "optional tags", items={"type": "string"})}, ["name", "description", "body"]), save_skill)
 
         self.add("run_analysis", "Run your own pandas/numpy/scipy/pandas_ta code (sandboxed: no network, no files, no credentials). Preloaded variables: bars (dict symbol -> OHLCV DataFrame with vwap/trade_count and, for daily, the screener indicator columns), screener (the full daily table, index=symbol), chains (dict underlying -> option chain DataFrame with bid/ask/iv/greeks/oi), fills, trades, equity (your own history), plus pd, np, stats, ta (pandas_ta). print() results or end with an expression. Use for anything the fixed tools do not compute: custom indicators, correlations/beta, seasonality, event studies, expected-move vs realized, sizing simulations, quick backtests of a rule.",
                  _schema({"code": _p("code", "string", "python code"), "symbols": _p("symbols", "array", "symbols to load into `bars` (max 25)", items={"type": "string"}),

@@ -335,6 +335,13 @@ def api_world():
         except Exception:
             pass
         try:
+            from .skills import SkillStore
+            _st = SkillStore()
+            out["skills"] = [x.summary() for x in _st.all()]
+            out["skills_errors"] = _st.errors
+        except Exception as e:
+            out["skills"], out["skills_errors"] = [], [str(e)[:80]]
+        try:
             from .knowledge import KnowledgeBase
             from .config import SETTINGS as _S
             out["knowledge"] = KnowledgeBase().index()
@@ -497,6 +504,29 @@ def _context_plan_safe(s):
         return context_plan(s)
     except Exception as e:
         return {"tokens": None, "source": f"error: {str(e)[:60]}", "effective_chars": s.context_char_budget, "tool_result_chars": s.tool_result_max_chars, "warning": None}
+
+
+@app.get("/api/skills")
+def api_skills():
+    from .skills import SkillStore
+    st = SkillStore()
+    return {"skills": [x.summary() for x in st.all()], "errors": st.errors}
+
+
+@app.post("/api/skills")
+async def api_skills_action(request: Request):
+    from .skills import SkillStore
+    if request.headers.get("x-requested-with") != "munchkin":
+        raise HTTPException(403, "bad request origin")
+    body = await request.json()
+    name, action = str(body.get("name", "")), str(body.get("action", ""))
+    st = SkillStore()
+    ok = {"approve": lambda: st.approve(name), "enable": lambda: st.set_enabled(name, True), "disable": lambda: st.set_enabled(name, False),
+          "delete": lambda: st.delete_draft(name)}.get(action, lambda: False)()
+    if not ok:
+        raise HTTPException(400, f"cannot {action} '{name}'")
+    ctx().journal.add_event("config", f"skill {name}: {action} (dashboard)")
+    return {"ok": True, "skills": [x.summary() for x in st.all()]}
 
 
 @app.get("/api/config/llm")
