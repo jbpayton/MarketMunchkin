@@ -197,6 +197,11 @@ class Watcher:
             px = snaps.get(sym, {}).get("price")
             if not px or not_yet(rec, now) or not index_ok(rec, spy_chg):
                 continue
+            if snaps.get(sym, {}).get("price_src") == "yfinance-fallback":
+                # fallback quotes can lag by minutes: never open a position on one. Exits and resting stops are unaffected.
+                if rec["direction"] == "above" and px >= rec["trigger_price"] or rec["direction"] == "below" and px <= rec["trigger_price"]:
+                    events.append(f"{sym}: armed trigger {rec['direction']} {rec['trigger_price']} seen on a fallback quote ({px}); waiting for the broker feed before firing")
+                continue
             if sym in held and (rec.get("expression") or "stock") == "stock":
                 # double-buy protection for stock arms only; an option expression on a held underlying is a deliberate
                 # add-on and is sized against the per-underlying cap when it fires
