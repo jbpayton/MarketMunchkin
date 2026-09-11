@@ -454,6 +454,12 @@ def test_telegram_bot_pairing_commands_and_requests(tmp_path, monkeypatch):
     class R:
         class S: virtual_equity, daily_pnl, buying_power_now, market_open = 498.7, -5.1, 400.0, True
         def state(self): return R.S()
+    import munchkin.entries as E
+    class FakeBook:
+        def __init__(self, j): pass
+        def all(self): return {}
+        def disarm(self, s): pass
+    monkeypatch.setattr(E, "EntryBook", FakeBook)
     j = J(); bot = TG.Bot(j, B(), R())
     assert "not paired" in bot.handle_text(42, "/status")
     assert "No valid pairing code" in bot.handle_text(42, "/pair NOPE")
