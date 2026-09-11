@@ -4,6 +4,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import pathlib
+import re
 import subprocess
 import time
 from typing import Any
@@ -101,6 +103,13 @@ def api_overview():
                    "stop": o.get("stop_price"), "tif": o.get("time_in_force"), "status": o.get("status")} for o in oo]
         from .entries import EntryBook
         armed = list(EntryBook(j).all().values())
+        if armed:
+            try:
+                snaps = c.market.snapshots(sorted({a["symbol"] for a in armed}))
+                for a in armed:
+                    a["last"] = snaps.get(a["symbol"], {}).get("price")
+            except Exception:
+                pass
         today = now_et().date().isoformat()
         by_day = j.realized_by_day()
         realized_today = by_day.get(today, 0.0)
@@ -111,7 +120,11 @@ def api_overview():
             "daemon": _daemon_status(), "halted": HALT_FILE.exists(), "armed": armed,
             "last_session_end": j.get("watch:last_session_end"), "world_brief_ts": j.get("world_brief_ts"),
             "events": j.events(12), "starting_capital": SETTINGS.risk.starting_capital, "max_positions": SETTINGS.risk.max_positions,
-            "cadence": {"interval_min": SETTINGS.watch.intraday_interval_min, "poll_s": SETTINGS.watch.poll_seconds},
+            "cadence": {"interval_min": SETTINGS.watch.intraday_interval_min, "poll_s": SETTINGS.watch.poll_seconds, "min_gap_s": SETTINGS.watch.min_gap_seconds, "continuous": SETTINGS.watch.continuous},
+            "style": __import__("munchkin.styles", fromlist=["get_style"]).get_style(j),
+            "sessions_today": j.sessions_today(), "tasks_open": len(j.open_tasks(50)),
+            "last_session": (lambda x: {"id": x["id"], "phase": x["phase"], "started_at": x["started_at"], "nodes": _session_nodes(j, x["id"]), "actions": ((x["summary"] or "").split("## Actions", 1)[1].split("##", 1)[0].strip()[:300] if "## Actions" in (x["summary"] or "") else "")} if x else None)(j.last_session_summary()),
+            "regime": (lambda t: (lambda r: {"score": r["score"], "label": r["label"]})(__import__("munchkin.analytics", fromlist=["regime"]).regime(t[0], {})) if t[0] is not None else None)(__import__("munchkin.screener", fromlist=["load"]).load()),
         }
 
     return cached("overview", 20, build)
@@ -166,7 +179,7 @@ def api_sessions(limit: int = 40):
             actions = summ.split("## Actions", 1)[1].split("##", 1)[0].strip()
         out.append({"id": s["id"], "phase": s["phase"], "task": s.get("task"), "started_at": s["started_at"], "ended_at": s.get("ended_at"),
                     "tool_calls": s.get("tool_calls"), "dry_run": bool(s.get("dry_run")), "actions": actions[:400],
-                    "has_summary": bool(summ)})
+                    "has_summary": bool(summ), "nodes": _session_nodes(j, s["id"])})
     return out
 
 
@@ -229,6 +242,199 @@ async def api_halt(request: Request):
     return {"halted": HALT_FILE.exists()}
 
 
+# ------------------------------------------------------------------ style, world, positions, session nodes (new UI)
+@app.get("/api/style")
+def api_style():
+    from .styles import describe, get_style
+    d = describe()
+    d["active"] = get_style(ctx().journal)
+    return d
+
+
+@app.post("/api/style")
+async def api_style_set(request: Request):
+    from .styles import set_style, describe, get_style
+    if request.headers.get("x-requested-with") != "munchkin":
+        raise HTTPException(403, "bad request origin")
+    body = await request.json()
+    try:
+        set_style(ctx().journal, body.get("style", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _cache.pop("overview", None)
+    d = describe(); d["active"] = get_style(ctx().journal)
+    return d
+
+
+@app.get("/api/world")
+def api_world():
+    """Instruments for the state of the world: regime, breadth (with history), sectors, macro tape, BLS prints, calendar."""
+    c = ctx()
+
+    def build():
+        from . import analytics as A
+        from . import macro as M
+        from . import screener as scr
+        j = c.journal
+        out: dict[str, Any] = {"now": now_et().strftime("%Y-%m-%d %H:%M")}
+        table, age = scr.load()
+        try:
+            vix = c.market.vix()
+        except Exception:
+            vix = {}
+        if table is not None:
+            reg = A.regime(table, vix)
+            out["regime"] = {"score": reg["score"], "label": reg["label"], "components": reg["components"], "breadth": reg["breadth"], "table_age_h": round(age or 0, 1)}
+            try:
+                st = A.sector_table(table, table[table["is_etf"]])
+                out["sectors"] = [{"sector": i, "chg_1d": float(r["chg_1d"]), "chg_5d": float(r["chg_5d"]), "chg_20d": float(r["chg_20d"]), "pct_above_50d": float(r["pct_above_50d"]), "etf": r["etf"], "n": int(r["n"])} for i, r in st.iterrows()]
+            except Exception:
+                out["sectors"] = []
+        out["vix"] = vix
+        out["breadth_history"] = j.breadth_history(20)
+        try:
+            out["macro_tape"] = M.market_dashboard()
+        except Exception as e:
+            out["macro_tape"] = {"error": str(e)[:80]}
+        try:
+            out["bls"] = M.bls_series()
+        except Exception as e:
+            out["bls"] = {"error": str(e)[:80]}
+        try:
+            out["calendar"] = M.bls_schedule(21)
+        except Exception as e:
+            out["calendar"] = f"error: {str(e)[:80]}"
+        try:
+            out["fed"] = M.fed_monetary_rss(4)
+        except Exception:
+            out["fed"] = []
+        try:
+            out["dials"] = M.world_dials(out.get("macro_tape") or {}, out.get("regime"), vix)
+        except Exception as e:
+            out["dials"] = []
+            out["dials_error"] = str(e)[:80]
+        # upcoming scheduled catalysts: BLS release lines look like "YYYY-MM-DD HH:MM  Title"
+        events = []
+        today = now_et().date()
+        for line in (out.get("calendar") or "").split("\n"):
+            m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\S+)?\s*(.*)", line.strip())
+            if not m:
+                continue
+            try:
+                d = dt.date.fromisoformat(m.group(1))
+            except ValueError:
+                continue
+            if d >= today:
+                events.append({"date": m.group(1), "days": (d - today).days, "title": (m.group(3) or m.group(2) or "").strip()[:60], "kind": "data"})
+        try:
+            for ds in M.fomc_dates(8):
+                d = dt.date.fromisoformat(ds)
+                if d >= today:
+                    events.append({"date": ds, "days": (d - today).days, "title": "FOMC decision", "kind": "fed"})
+        except Exception:
+            pass
+        try:
+            from .knowledge import KnowledgeBase
+            from .config import SETTINGS as _S
+            out["knowledge"] = KnowledgeBase().index()
+            out["study"] = {"enabled": _S.watch.study_enabled, "per_night": _S.watch.study_per_night, "done_today": j.sessions_today("study"),
+                            "window": f"{_S.watch.study_start}-{_S.watch.study_end}"}
+        except Exception as e:
+            out["knowledge"], out["study"] = [], {"error": str(e)[:80]}
+        out["next_events"] = sorted(events, key=lambda e: e["days"])[:8]
+        out["brief"] = j.get("world_brief") or ""
+        out["brief_ts"] = j.get("world_brief_ts")
+        out["plan"] = j.get_plan()
+        out["plan_ts"] = j.get("plan_ts")
+        out["tasks_open"] = j.open_tasks(20)
+        out["lessons"] = j.lessons(20)
+        return out
+
+    return cached("world", 300, build)
+
+
+@app.get("/api/positions/{symbol}")
+def api_position(symbol: str):
+    c = ctx()
+    j = c.journal
+    sym = symbol.upper()
+    from .entries import EntryBook
+    from .optentry import SpreadBook, resolve_affordable, limit_for
+    from .util import is_option, parse_occ
+    pos = next((p for p in c.broker.positions() if p["symbol"] == sym), None)
+    p = parse_occ(sym)
+    underlying = p["underlying"] if p else sym
+    out: dict[str, Any] = {"symbol": sym, "underlying": underlying, "is_option": bool(p), "contract": p and {**p, "expiration": p["expiration"].isoformat()}}
+    if pos:
+        oo = c.broker.open_orders()
+        out["position"] = {"qty": fnum(pos["qty"], 4), "avg_entry": fnum(pos["avg_entry_price"], 3), "last": fnum(pos["current_price"], 3), "value": fnum(pos["market_value"]),
+                           "pnl": fnum(pos["unrealized_pl"]), "pnl_pct": fnum(float(pos["unrealized_plpc"]) * 100, 2), "today_pct": fnum(float(pos["change_today"]) * 100, 2),
+                           "exits": c.exits.describe(sym, oo)}
+        out["open_orders"] = [{"id": o.get("id"), "side": o.get("side"), "type": o.get("type"), "qty": o.get("qty"), "limit": o.get("limit_price"), "stop": o.get("stop_price"), "tif": o.get("time_in_force"), "status": o.get("status")} for o in oo if o.get("symbol") == sym]
+    th = j.thesis_for(sym) or {}
+    out["thesis"] = {k: th.get(k) for k in ("thesis", "target", "stop", "horizon", "ts")} | {"grade": (json.loads(th.get("meta") or "{}").get("catalyst_grade") if th else None)}
+    out["fills"] = [f for f in j.fills(symbol=sym)][-20:]
+    out["decisions"] = j.decisions(12, sym)
+    out["armed"] = EntryBook(j).get(underlying)
+    sb = SpreadBook(j).all()
+    out["spread"] = next((r for r in sb.values() if r["long"] == sym or r["short"] == sym), None)
+    try:
+        snap = c.market.snapshots([underlying]).get(underlying, {})
+        out["quote"] = snap
+        df = c.market.bars(underlying, "1D", 60)
+        out["bars_daily"] = [{"t": i.strftime("%Y-%m-%d"), "o": round(float(r["open"]), 2), "h": round(float(r["high"]), 2), "l": round(float(r["low"]), 2), "c": round(float(r["close"]), 2), "v": int(r["volume"])} for i, r in df.iterrows()]
+        df15 = c.market.bars(underlying, "15Min", 60)
+        today = now_et().date().isoformat()
+        out["bars_15m"] = [{"t": i.tz_convert("America/New_York").strftime("%H:%M"), "c": round(float(r["close"]), 2), "v": int(r["volume"])} for i, r in df15.iterrows() if i.tz_convert("America/New_York").strftime("%Y-%m-%d") == today]
+        table, _ = __import__("munchkin.screener", fromlist=["load"]).load()
+        if table is not None and underlying in table.index:
+            r = table.loc[underlying]
+            out["daily_context"] = {k: (None if r[k] != r[k] else (float(r[k]) if isinstance(r[k], (int, float)) else r[k])) for k in ("rsi14", "atr14_pct", "sma20_dist_pct", "sma50_dist_pct", "sma200_dist_pct", "hi52_dist_pct", "adx14", "mom_score", "rs_spy_20d", "beta_spy", "sector", "days_to_earnings", "rvol20_pct") if k in r.index}
+    except Exception as e:
+        out["bars_error"] = str(e)[:120]
+    # options read: held contract, held spread, or the armed option expression resolved as a preview
+    try:
+        want = out["spread"] or (p is not None) or (out["armed"] and out["armed"].get("expression", "stock") != "stock")
+        if want:
+            import datetime as _dt
+            a = c.market.option_analytics(underlying, None, (out.get("daily_context") or {}).get("rvol20_pct"))
+            out["option_read"] = a if "error" not in a else None
+            if out["armed"] and out["armed"].get("expression", "stock") != "stock":
+                expr = out["armed"]["expression"]; ctype = "call" if expr.startswith("call") else "put"
+                today = now_et().date(); min_dte = max(SETTINGS.risk.min_option_dte + 1, 4)
+                oi = {k["symbol"]: k for k in c.broker.option_contracts(underlying, today + _dt.timedelta(days=min_dte), today + _dt.timedelta(days=int(out["armed"].get("dte_target", 14)) + 21), ctype, limit=3000)}
+                rows = c.market.option_chain(underlying, min_dte, int(out["armed"].get("dte_target", 14)) + 21, 15.0, ctype, oi_map=oi)
+                legs, lim, note = resolve_affordable(rows, expr, float(out["armed"]["notional"]), int(out["armed"].get("dte_target", 14)), min_dte)
+                out["armed_preview"] = {"note": note, "limit": lim, "legs": [{"symbol": r["symbol"], "side": side, "strike": r["strike"], "exp": r["exp"], "dte": r["dte"], "bid": r["bid"], "ask": r["ask"], "delta": r["delta"], "iv": r["iv"], "oi": r.get("oi")} for r, side in legs], "qty": max(1, int(float(out["armed"]["notional"]) // (lim * 100))) if legs else 0}
+            if p is not None:
+                out["contract_quote"] = c.market.option_snapshots([sym])[0]
+            if out["spread"]:
+                out["spread_legs"] = c.market.option_snapshots([out["spread"]["long"], out["spread"]["short"]])
+    except Exception as e:
+        out["option_error"] = str(e)[:120]
+    return out
+
+
+def _session_nodes(j, sid: int) -> list[dict[str, Any]]:
+    nodes = []
+    for r in j.trace(sid):
+        k = r["kind"]
+        if k == "reasoning":
+            nodes.append({"k": "thinking", "n": len(r["result"] or "") // 400})
+        elif k == "tool":
+            res = (r["result"] or "")[:40]
+            name = r["name"] or ""
+            if res.startswith("REJECTED") or res.startswith("ERROR"):
+                nodes.append({"k": "blocked", "t": name})
+            elif name in ("buy_stock", "sell_stock", "buy_option", "sell_option", "open_spread", "close_spread", "arm_entry", "disarm_entry", "set_exit_levels", "complete_task", "set_plan", "set_world_brief"):
+                nodes.append({"k": "decision", "t": name})
+            else:
+                nodes.append({"k": "tool", "t": name, "s": r["secs"]})
+        elif k == "final":
+            nodes.append({"k": "final"})
+    return nodes
+
+
 # ------------------------------------------------------------------ config (providers / keys)
 @app.get("/api/config")
 def api_config():
@@ -284,6 +490,14 @@ async def api_config_set(request: Request):
     return P.status()
 
 
+def _context_plan_safe(s):
+    try:
+        from .llm import context_plan
+        return context_plan(s)
+    except Exception as e:
+        return {"tokens": None, "source": f"error: {str(e)[:60]}", "effective_chars": s.context_char_budget, "tool_result_chars": s.tool_result_max_chars, "warning": None}
+
+
 @app.get("/api/config/llm")
 def api_config_llm():
     from .config import LLM_PRESETS, load_llm_settings, llm_api_key
@@ -291,7 +505,8 @@ def api_config_llm():
     key = llm_api_key()
     return {"provider": s.provider, "base_url": s.base_url, "model": s.model, "send_reasoning_effort": s.send_reasoning_effort,
             "reasoning_effort": s.reasoning_effort, "reasoning_by_phase": s.reasoning_by_phase, "max_tool_calls": s.max_tool_calls,
-            "context_char_budget": s.context_char_budget, "key_masked": ("*" * max(0, len(key) - 4) + key[-4:]) if key else None,
+            "context_char_budget": s.context_char_budget, "tool_result_max_chars": s.tool_result_max_chars, "context": _context_plan_safe(s),
+            "key_masked": ("*" * max(0, len(key) - 4) + key[-4:]) if key else None,
             "presets": {k: {"base_url": v["base_url"], "note": v["note"]} for k, v in LLM_PRESETS.items()}}
 
 
@@ -457,6 +672,45 @@ render();setInterval(()=>{if(tab==='overview'&&sessionId===null&&!$('#killconfir
 </script></body></html>"""
 
 
+UI_DIR = pathlib.Path(__file__).resolve().parent / "ui"
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
+    return (UI_DIR / "index.html").read_text()
+
+
+@app.get("/ui/{name}")
+def ui_asset(name: str):
+    from fastapi.responses import FileResponse
+    if "/" in name or ".." in name:
+        raise HTTPException(404)
+    f = UI_DIR / name
+    if not f.exists():
+        raise HTTPException(404)
+    return FileResponse(str(f), media_type="text/css" if name.endswith(".css") else "application/javascript" if name.endswith(".js") else "text/html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/legacy", response_class=HTMLResponse)
+def legacy():
     return PAGE
+
+
+@app.get("/api/spark/{symbol}")
+def api_spark(symbol: str):
+    """Today's 15-minute closes for a symbol (regular + extended hours), cached briefly."""
+    c = ctx()
+    sym = symbol.upper()
+    from .util import parse_occ
+    u = (parse_occ(sym) or {}).get("underlying", sym)
+
+    def build():
+        try:
+            df = c.market.bars(u, "15Min", 80)
+            today = now_et().date().isoformat()
+            closes = [round(float(r["close"]), 2) for i, r in df.iterrows() if i.tz_convert("America/New_York").strftime("%Y-%m-%d") == today]
+            return {"symbol": u, "closes": closes}
+        except Exception as e:
+            return {"symbol": u, "closes": [], "error": str(e)[:80]}
+
+    return cached("spark:" + u, 180, build)

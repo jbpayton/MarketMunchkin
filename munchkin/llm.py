@@ -5,6 +5,7 @@ bearer key comes from .env (LLM_API_KEY) and is never exposed to the model."""
 from __future__ import annotations
 
 import json
+import re
 import logging
 import time
 from dataclasses import dataclass, field
@@ -35,10 +36,88 @@ class LoopResult:
     tool_log: list[dict[str, Any]] = field(default_factory=list)
 
 
+_CTX_CACHE: dict[str, tuple[float, tuple[int | None, str]]] = {}
+TOOL_OVERHEAD_TOKENS = 10_000      # ~48 tool schemas + prompt scaffolding
+CHARS_PER_TOKEN = 4.0
+MIN_RECOMMENDED_TOKENS = 32_768
+
+
+def detect_context_tokens(s: LLMSettings) -> tuple[int | None, str]:
+    """Ask the serving stack how big the context window is. Cached 10 minutes. (tokens or None, source)."""
+    if s.context_tokens:
+        return int(s.context_tokens), "configured (LLM_CONTEXT_TOKENS)"
+    key = f"{s.provider}|{s.base_url}|{s.model}"
+    hit = _CTX_CACHE.get(key)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    base = s.base_url.rstrip("/")
+    root = base[:-3] if base.endswith("/v1") else base
+    headers = {}
+    k = llm_api_key()
+    if k:
+        headers["Authorization"] = f"Bearer {k}"
+    res: tuple[int | None, str] = (None, "server does not report a context size")
+    try:
+        if s.provider == "lmstudio":
+            for m in httpx.get(root + "/api/v0/models", timeout=5).json().get("data", []):
+                if m.get("id") == s.model:
+                    if m.get("loaded_context_length"):
+                        res = (int(m["loaded_context_length"]), "LM Studio (loaded context)")
+                    elif m.get("max_context_length"):
+                        res = (int(m["max_context_length"]), "LM Studio (model max; not loaded)")
+        elif s.provider == "ollama":
+            d = httpx.post(root + "/api/show", json={"name": s.model}, timeout=5).json()
+            m = re.search(r"num_ctx\s+(\d+)", d.get("parameters") or "")
+            if m:
+                res = (int(m.group(1)), "Ollama num_ctx")
+            else:
+                res = (4096, "Ollama default num_ctx (set num_ctx in a Modelfile or OLLAMA_CONTEXT_LENGTH)")
+        elif s.provider == "openrouter":
+            for m in httpx.get("https://openrouter.ai/api/v1/models", timeout=8).json().get("data", []):
+                if m.get("id") == s.model and m.get("context_length"):
+                    res = (int(m["context_length"]), "OpenRouter model card")
+        elif s.provider == "anthropic":
+            res = (200_000, "Anthropic (known)")
+        elif s.provider == "openai":
+            res = (128_000, "OpenAI (assumed)")
+        else:  # vllm / custom: some servers expose max_model_len on /v1/models
+            for m in httpx.get(base + "/v1/models", headers=headers, timeout=5).json().get("data", []):
+                if m.get("id") == s.model:
+                    n = m.get("max_model_len") or m.get("context_length") or m.get("context_window")
+                    if n:
+                        res = (int(n), "server /v1/models")
+    except Exception as e:
+        res = (None, f"detection failed: {type(e).__name__}")
+    _CTX_CACHE[key] = (time.time(), res)
+    return res
+
+
+def context_plan(s: LLMSettings) -> dict[str, Any]:
+    """Derive the transcript budget from the context window so a smaller model gets compacted harder instead of failing."""
+    tokens, source = detect_context_tokens(s)
+    plan: dict[str, Any] = {"tokens": tokens, "source": source, "configured_chars": s.context_char_budget,
+                            "effective_chars": s.context_char_budget, "tool_result_chars": s.tool_result_max_chars, "warning": None}
+    if tokens:
+        usable = tokens - s.max_tokens - TOOL_OVERHEAD_TOKENS
+        derived = max(12_000, int(usable * CHARS_PER_TOKEN))
+        plan["effective_chars"] = min(s.context_char_budget, derived)
+        scale = plan["effective_chars"] / max(1, s.context_char_budget)
+        plan["tool_result_chars"] = max(800, int(s.tool_result_max_chars * min(1.0, scale)))
+        if tokens < MIN_RECOMMENDED_TOKENS:
+            plan["warning"] = f"context window {tokens:,} tokens is below the recommended {MIN_RECOMMENDED_TOKENS:,}; sessions will be compacted hard and lose detail"
+    else:
+        plan["warning"] = "context size unknown; using the configured budget — set LLM_CONTEXT_TOKENS if the server rejects long prompts"
+    return plan
+
+
 class LLMClient:
     def __init__(self, settings: LLMSettings | None = None):
         s = settings or load_llm_settings()
         self.s = s
+        self.plan = context_plan(s)
+        if self.plan.get("warning"):
+            log.warning("LLM context: %s", self.plan["warning"])
+        log.info("LLM context window %s (%s) -> budget %d chars", self.plan["tokens"], self.plan["source"], self.plan["effective_chars"])
         self.base = s.base_url.rstrip("/")
         self.model = s.model
         headers = {"Content-Type": "application/json"}
@@ -98,7 +177,7 @@ class LLMClient:
                       tools=[{"type": "function", "function": {"name": "ping", "description": "ping", "parameters": {"type": "object", "properties": {}}}}],
                       max_tokens=64, reasoning_effort="low")
         return {"ok": True, "model": self.model, "base_url": self.base, "tool_calls": bool(r["message"].get("tool_calls")),
-                "reasoning_field": bool(r["message"].get("reasoning_content")), "secs": round(time.time() - t0, 1)}
+                "reasoning_field": bool(r["message"].get("reasoning_content")), "secs": round(time.time() - t0, 1), "context": self.plan}
 
     # ------------------------------------------------------------------ context mgmt
     @staticmethod
@@ -112,7 +191,7 @@ class LLMClient:
 
     def _compact(self, messages: list[dict[str, Any]]) -> None:
         """Shrink old tool results when the transcript outgrows the budget."""
-        budget = self.s.context_char_budget
+        budget = self.plan["effective_chars"]
         if self._size(messages) <= budget:
             return
         tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
@@ -210,6 +289,9 @@ class LLMClient:
                         result = registry.call(name, args)
                 result = redact(result)
                 cap = (registry.limit(name) if hasattr(registry, "limit") else None) or self.s.tool_result_max_chars
+                scale = self.plan["effective_chars"] / max(1, self.s.context_char_budget)
+                if scale < 1.0:
+                    cap = max(600, int(cap * scale))
                 if len(result) > cap:
                     result = result[:cap] + f"\n...[truncated at {cap} chars; ask for a narrower slice]"
                 messages.append({"role": "tool", "tool_call_id": tc.get("id"), "content": result})

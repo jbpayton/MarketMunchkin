@@ -141,6 +141,18 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                 return True
         return False
 
+    def _in_study(now: dt.datetime) -> bool:
+        if not W.study_enabled:
+            return False
+        sh, sm = _hm(W.study_start)
+        eh, em = _hm(W.study_end)
+        t, start, end = now.time(), dt.time(sh, sm), dt.time(eh, em)
+        return (start <= t <= end) if start <= end else (t >= start or t <= end)
+
+    def _study_done_tonight() -> int:
+        cutoff = (dt.datetime.now() - dt.timedelta(hours=12)).isoformat(timespec="minutes")
+        return sum(1 for r in j.sessions(12) if r.get("phase") == "study" and (r.get("started_at") or "") >= cutoff)
+
     def _rotation_task() -> str:
         """State-aware duty for a session with no event and an empty queue. The opportunity board is the default;
         housekeeping items run only when they are actually stale."""
@@ -227,9 +239,12 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         except Exception as e:
             logging.warning("baseline reset failed: %s", e)
 
+    from .styles import effective_watch, get_style
     while True:
         now = now_et()
         today = now.date().isoformat()
+        W = effective_watch(SETTINGS.watch, get_style(j))
+        watcher.cfg = W
         if today not in trading_day_cache:
             try:
                 trading_day_cache[today] = ctx.broker.is_trading_day(now.date())
@@ -312,7 +327,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         else:
             since_end = (now - last_session_end).total_seconds() if last_session_end else 1e9
             backoff = min(1800, 300 * failures["n"]) if failures["n"] else 0
-            if since_end >= max(W.offhours_interval_min * 60, backoff) and (j.next_task() or _in_offhours(now, is_td)):
+            if since_end >= max(W.offhours_interval_min * 60, backoff) and (j.next_task() or _in_offhours(now, is_td) or _in_study(now)):
                 nt = j.next_task()
                 if nt:
                     if nt["kind"] == "reflect":
@@ -320,7 +335,12 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                         _run("reflect", f"SELF-ASSIGNED TASK #{nt['id']}: {nt['text']}")
                     else:
                         _run("research", f"SELF-ASSIGNED TASK #{nt['id']} (close it with complete_task when done): {nt['text']}")
-                elif j.sessions_today("reflect") < W.max_reflect_per_day:
+                elif _in_study(now) and _study_done_tonight() < W.study_per_night:
+                    from .knowledge import KnowledgeBase
+                    picks = KnowledgeBase().next_topics(3)
+                    _run("study", "STUDY: pick ONE topic — " + "; ".join(f"{p['title']} [{p['slug']}; {p['why']}; last studied {p['last'][:10]}]" for p in picks)
+                         + " — or a gap you noticed in recent sessions. Budget: at most 6 searches and 4 page fetches. Finish with save_knowledge.")
+                elif _in_offhours(now, is_td) and j.sessions_today("reflect") < W.max_reflect_per_day:
                     _run("reflect", None)
                 else:
                     last_session_end = now  # nothing to do; check again after the interval

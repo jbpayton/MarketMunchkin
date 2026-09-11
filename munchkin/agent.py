@@ -45,6 +45,13 @@ PHASE_INSTRUCTIONS = {
         "the themes and build a watchlist of 5-10 candidates with theses, catalyst grades and triggers. Update the "
         "playbook if warranted. Finish with set_plan."),
     "adhoc": "AD-HOC session: follow the operator's task below. Finish with a concise summary.",
+    "study": (
+        "STUDY session (off hours, no trading). Learn ONE topic properly so future sessions reason better: pick from the "
+        "suggested curriculum topics or a gap you noticed recently. Budget: at most 6 web_search calls and 4 fetch_page calls; "
+        "prefer primary sources (Fed, BLS, Treasury, exchanges, CBOE, academic/central-bank papers) and reputable explainers. "
+        "Then write the note with save_knowledge: what it is, the mechanism, how it moves markets (with a historical example or two), "
+        "what to watch (data, tickers, thresholds), and how MarketMunchkin should use it given its cash-only, short-horizon book. "
+        "If the study surfaces a concrete, checkable idea for the book, add_task it. Do not touch positions or the plan."),
     "reflect": (
         "REFLECTION session (no orders). This is your room to think. Step back from the tape: what have you actually "
         "observed across recent sessions and trades, which of your beliefs held up, which did not, what is the market "
@@ -66,8 +73,19 @@ def _lessons_block(j: Journal, n: int = 20) -> str:
     return "\n".join(f"- {l['text'][:300]}" for l in ls)
 
 
-def build_system_prompt(s: Settings, j: Journal, st: RiskState, b: Broker, phase: str = "intraday") -> str:
+def _library_block() -> str:
+    try:
+        from .knowledge import KnowledgeBase
+        return KnowledgeBase().index_text(40)
+    except Exception as e:
+        return f"(library unavailable: {e})"
+
+
+def build_system_prompt(s: Settings, j: Journal, st: RiskState, b: Broker, phase: str = "intraday", style: str = "balanced") -> str:
+    from .styles import FIXED_RULES, style_brief
     L = s.risk
+    style_block = style_brief(style) + "\nOptions allowed: " + ("no" if not L.allow_options else ("singles and debit verticals" if L.allow_singles and L.allow_spreads else ("singles only" if L.allow_singles else "verticals only"))) + f". Probes ${L.probe_min}–${L.probe_max}."
+    fixed_block = "\n".join(f"- {r}" for r in FIXED_RULES)
     if L.enforce_pdt:
         pdt_line = (f"- Max {L.max_day_trades_5d} day trades per rolling 5 business days (buy and sell the same security the same day). "
                     "They are scarce: reserve them for emergency exits, never scalp.")
@@ -85,7 +103,13 @@ def build_system_prompt(s: Settings, j: Journal, st: RiskState, b: Broker, phase
                   "## Tasks\n(what you queued or closed with add_task / complete_task)")
     return f"""You are MarketMunchkin, an autonomous trader running a small CASH account at Alpaca ({'PAPER' if b.paper else 'LIVE'} trading). Your operator's goal: compound ${L.starting_capital:.0f} as fast as reasonably possible without blowing up, and learn from every trade. You have real tools: live quotes, charts with indicators, an options chain with greeks, a technical screener over ~600 liquid US names, a news feed, web search, order entry, and a journal. Think like a disciplined, aggressive small-account trader.
 
-## Hard constraints (enforced in code; violating orders are rejected)
+## Fixed rules (every style, enforced in code, not negotiable)
+{fixed_block}
+
+## Trading style (operator-selected; changes sizing, instruments and tempo)
+{style_block}
+
+## Hard limits right now (enforced in code; violating orders are rejected)
 - Cash account: buying power = SETTLED cash only (T+{L.settlement_days}). No margin, no shorting, no naked/credit options.
 {pdt_line}
 - Max {L.max_positions} open positions; max {L.max_position_pct*100:.0f}% of equity per position; total options premium at risk <= {L.max_options_pct*100:.0f}% of equity.
@@ -151,6 +175,16 @@ Sessions run back to back during market hours and periodically outside them: con
 6. {ending}
 
 Keep tool calls purposeful (max {s.llm.max_tool_calls} per session). Now: {st.date}; market {'OPEN' if st.market_open else 'CLOSED'}.
+
+## Using the state of the world
+The regime score, breadth, sectors and the cross-asset dials in get_market_context are not decoration: let them direct where you look
+and how hard you press. Risk-off, weak breadth or deteriorating credit -> fewer, smaller, confirmed-catalyst entries, relative-strength
+names, defined-risk expressions. Risk-on with broad participation and small caps leading -> hunt breakouts in the leading sectors.
+Rising rates or a rising dollar -> avoid long-duration growth; falling VIX with firm credit -> lean in. When a dial moved sharply,
+search the news for the driver before trading anything correlated with it.
+
+## Library (durable notes from study sessions; get_knowledge <slug> for the full note)
+{_library_block()}
 
 ## Playbook
 {j.playbook().strip()}
@@ -223,17 +257,23 @@ def build_user_prompt(phase: str, task: str | None, ctx: Context, st: RiskState)
 
 
 def make_context(dry_run: bool = False, allow_trading: bool = True, phase: str = "adhoc") -> Context:
+    from .styles import effective_limits, get_style
     b = Broker()
     m = Market()
     j = Journal()
-    r = RiskEngine(b, m, j, SETTINGS.risk)
-    return Context(broker=b, market=m, journal=j, risk=r, settings=SETTINGS, dry_run=dry_run, allow_trading=allow_trading, phase=phase)
+    style = get_style(j)
+    limits = effective_limits(SETTINGS.risk, style)
+    settings = SETTINGS.model_copy(update={"risk": limits})
+    r = RiskEngine(b, m, j, limits)
+    ctx = Context(broker=b, market=m, journal=j, risk=r, settings=settings, dry_run=dry_run, allow_trading=allow_trading, phase=phase)
+    ctx.style = style
+    return ctx
 
 
 def run_session(phase: str = "intraday", task: str | None = None, dry_run: bool = False, allow_trading: bool = True,
                 on_event: Callable[[str, dict[str, Any]], None] | None = None, refresh_screener: bool | None = None,
                 memory_writes: bool = True) -> LoopResult:
-    if phase == "reflect":
+    if phase in ("reflect", "study"):
         allow_trading = False
     ctx = make_context(dry_run=dry_run, allow_trading=allow_trading, phase=phase)
     ctx.memory_writes = memory_writes and not dry_run
@@ -258,13 +298,17 @@ def run_session(phase: str = "intraday", task: str | None = None, dry_run: bool 
 
     st = ctx.risk.state()
     ctx.research.min_charts = {"premarket": 6, "research": 6, "intraday": 4, "event": 3, "postmarket": 3}.get(phase, 4)
-    system = build_system_prompt(SETTINGS, j, st, ctx.broker, phase)
+    system = build_system_prompt(ctx.settings, j, st, ctx.broker, phase, getattr(ctx, "style", "balanced"))
     user = build_user_prompt(phase, task, ctx, st)
     sid = j.start_session(phase, task, dry_run)
     ctx.session_id = sid
     registry = ToolRegistry(ctx)
     llm = LLMClient()
-    llm.s = llm.s.model_copy(update={"reasoning_effort": SETTINGS.llm.reasoning_by_phase.get(phase, SETTINGS.llm.reasoning_effort)})
+    from .styles import STYLES
+    _eff = SETTINGS.llm.reasoning_by_phase.get(phase, SETTINGS.llm.reasoning_effort)
+    if phase in ("intraday", "event", "premarket") and STYLES.get(getattr(ctx, "style", "balanced"), {}).get("reasoning") == "high":
+        _eff = "high"
+    llm.s = llm.s.model_copy(update={"reasoning_effort": _eff})
     j.add_trace(sid, "system", None, None, system)
     j.add_trace(sid, "prompt", None, None, user)
 

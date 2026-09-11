@@ -37,8 +37,12 @@ BLS_RELEASES = {
 }
 MARKET_TICKERS = {
     "us10y_yield": "^TNX", "us5y_yield": "^FVX", "us3m_yield": "^IRX", "wti_oil": "CL=F", "gold": "GC=F", "copper": "HG=F",
-    "dollar_index": "DX-Y.NYB", "vix": "^VIX", "es_futures": "ES=F", "nq_futures": "NQ=F", "bitcoin": "BTC-USD",
+    "dollar_index": "DX-Y.NYB", "vix": "^VIX", "vix3m": "^VIX3M", "es_futures": "ES=F", "nq_futures": "NQ=F", "bitcoin": "BTC-USD",
+    # cross-asset tells (ETF proxies): credit appetite, size, growth vs broad, participation, duration
+    "spy": "SPY", "qqq": "QQQ", "iwm": "IWM", "rsp": "RSP", "hyg": "HYG", "lqd": "LQD", "tlt": "TLT",
 }
+# tape keys shown to the model in the compact dashboard (the ETF proxies feed the dials instead)
+TAPE_SHOW = ["us10y_yield", "us5y_yield", "us3m_yield", "wti_oil", "gold", "copper", "dollar_index", "vix", "es_futures", "nq_futures", "bitcoin"]
 
 _cache: dict[str, tuple[float, Any]] = {}
 
@@ -169,6 +173,25 @@ def fomc_calendar() -> str:
     return _cached("fomccal", 24 * 3600, fetch)
 
 
+_MONTHS = {m: i for i, m in enumerate(["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"], 1)}
+
+
+def fomc_dates(n: int = 6) -> list[str]:
+    """Decision days (last day of each meeting) parsed from the Fed's calendar page, ISO dates, this year onward."""
+    txt = fomc_calendar()
+    year, last_mon, out = dt.date.today().year, 0, []
+    for m in re.finditer(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:\s*[-–/]\s*(?:[A-Za-z]+\s+)?(\d{1,2}))?", txt):
+        mon = _MONTHS[m.group(1)]
+        if mon < last_mon:
+            year += 1
+        last_mon = mon
+        try:
+            out.append(dt.date(year, mon, int(m.group(3) or m.group(2))).isoformat())
+        except ValueError:
+            continue
+    return sorted(set(out))[:n]
+
+
 def fed_statement(max_chars: int = 2500) -> str:
     items = fed_monetary_rss(10)
     stmt = next((i for i in items if "statement" in i["title"].lower()), items[0] if items else None)
@@ -191,7 +214,7 @@ def market_dashboard() -> dict[str, Any]:
         import yfinance as yf
         out: dict[str, Any] = {"source": "Yahoo Finance via yfinance", "as_of": dt.datetime.now().strftime("%Y-%m-%d %H:%M")}
         try:
-            data = yf.download(list(MARKET_TICKERS.values()), period="6d", interval="1d", progress=False, group_by="ticker", threads=True)
+            data = yf.download(list(MARKET_TICKERS.values()), period="2mo", interval="1d", progress=False, group_by="ticker", threads=True)
         except Exception as e:
             return {"error": str(e)[:120]}
         for name, tk in MARKET_TICKERS.items():
@@ -201,8 +224,12 @@ def market_dashboard() -> dict[str, Any]:
                 rec = {"last": round(last, 2), "chg_1d_pct": round((last / prev - 1) * 100, 2)}
                 if len(c) >= 5:
                     rec["chg_5d_pct"] = round((last / float(c.iloc[-5]) - 1) * 100, 2)
+                if len(c) >= 21:
+                    rec["chg_20d_pct"] = round((last / float(c.iloc[-21]) - 1) * 100, 2)
                 if "yield" in name:
                     rec["chg_1d_bp"] = round((last - prev) * 100, 1)
+                    if len(c) >= 21:
+                        rec["chg_20d_bp"] = round((last - float(c.iloc[-21])) * 100, 1)
                 out[name] = rec
             except Exception:
                 out[name] = {"error": "n/a"}
@@ -238,3 +265,60 @@ def format_dashboard(d: dict[str, Any]) -> str:
         if isinstance(v, dict) and "last" in v:
             parts.append(f"{k} {v['last']} ({v['chg_1d_pct']:+.2f}% 1d" + (f", {v['chg_5d_pct']:+.2f}% 5d" if "chg_5d_pct" in v else "") + (f", {v['chg_1d_bp']:+.1f}bp" if "chg_1d_bp" in v else "") + ")")
     return f"Rates/commodities/futures ({d.get('source')}, {d.get('as_of')}): " + "; ".join(parts)
+
+
+def _clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, x))
+
+
+def world_dials(tape: dict[str, Any], regime: dict[str, Any] | None, vix: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Cross-asset 'state of the world' dials. Each is scored -1 (risk-off / headwind) .. +1 (risk-on / tailwind)
+    from the 20-day tape so the dashboard can draw them as diverging bars. Pure function of cached data."""
+    t = lambda k, f="chg_20d_pct": (tape.get(k) or {}).get(f)  # noqa: E731
+    dials: list[dict[str, Any]] = []
+
+    def add(key, label, score, value, note):
+        if score is None:
+            return
+        dials.append({"key": key, "label": label, "score": round(_clamp(score), 2), "value": value, "note": note})
+
+    b = (regime or {}).get("breadth") or {}
+    if b.get("pct_above_sma50") is not None:
+        x = float(b["pct_above_sma50"])
+        add("breadth", "Breadth", (x - 50) / 40, f"{x:.0f}% above 50-day", "share of the screened universe in an uptrend")
+    if t("spy") is not None:
+        x = float(t("spy"))
+        add("trend", "Trend", x / 6, f"SPY {x:+.1f}% · 20d", "broad index momentum")
+    v = (vix or {}).get("vix") or (tape.get("vix") or {}).get("last")
+    if v is not None:
+        v = float(v); v3 = (tape.get("vix3m") or {}).get("last"); term = round(v / float(v3), 2) if v3 else None
+        add("vol", "Volatility", (20 - v) / 10 + (0 if term is None else (-0.3 if term > 1 else 0.15)), f"VIX {v:.1f}" + (f" · term {term}" if term else ""), "under 20 calm; term > 1 = near-term fear (backwardation)")
+    if t("hyg") is not None and t("lqd") is not None:
+        d = float(t("hyg")) - float(t("lqd"))
+        add("credit", "Credit", d / 2.5, f"HY vs IG {d:+.1f}% · 20d", "high-yield outperforming investment-grade = appetite for risk")
+    if t("iwm") is not None and t("spy") is not None:
+        d = float(t("iwm")) - float(t("spy"))
+        add("size", "Small caps", d / 4, f"IWM vs SPY {d:+.1f}% · 20d", "small caps leading = broad risk-on")
+    if t("rsp") is not None and t("spy") is not None:
+        d = float(t("rsp")) - float(t("spy"))
+        add("participation", "Participation", d / 2.5, f"equal- vs cap-weight {d:+.1f}%", "equal-weight leading = the rally is broad, not just megacaps")
+    if t("qqq") is not None and t("spy") is not None:
+        d = float(t("qqq")) - float(t("spy"))
+        add("growth", "Growth vs broad", d / 4, f"QQQ vs SPY {d:+.1f}% · 20d", "growth leadership = risk appetite; lagging = rotation/defense")
+    if t("us10y_yield", "chg_20d_bp") is not None:
+        bp = float(t("us10y_yield", "chg_20d_bp")); lvl = (tape.get("us10y_yield") or {}).get("last")
+        m3 = (tape.get("us3m_yield") or {}).get("last"); curve = f" · 10y−3m {float(lvl) - float(m3):+.2f}" if lvl is not None and m3 is not None else ""
+        add("rates", "Rates", -bp / 40, f"10y {lvl}% ({bp:+.0f}bp 20d){curve}", "rising long yields tighten conditions; inverted curve = late cycle")
+    if t("dollar_index") is not None:
+        x = float(t("dollar_index")); lvl = (tape.get("dollar_index") or {}).get("last")
+        add("dollar", "Dollar", -x / 3, f"DXY {lvl} ({x:+.1f}% 20d)", "a rising dollar is a headwind for risk assets and commodities")
+    if t("copper") is not None and t("gold") is not None:
+        d = float(t("copper")) - float(t("gold"))
+        add("cycle", "Copper / gold", d / 6, f"{d:+.1f}% · 20d", "copper over gold = growth expectations; gold over copper = fear")
+    if t("wti_oil") is not None:
+        x = float(t("wti_oil")); lvl = (tape.get("wti_oil") or {}).get("last")
+        add("oil", "Oil", -x / 12, f"WTI {lvl} ({x:+.1f}% 20d)", "a spike taxes consumers and lifts inflation risk")
+    if t("bitcoin") is not None:
+        x = float(t("bitcoin"))
+        add("crypto", "Crypto", x / 15, f"BTC {x:+.1f}% · 20d", "the most speculative risk gauge")
+    return dials

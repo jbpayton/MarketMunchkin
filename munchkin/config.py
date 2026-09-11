@@ -82,6 +82,11 @@ class RiskLimits(BaseModel):
     size_mult_speculative: float = 0.5     # per-position cap multiplier when the catalyst is a rumor/unnamed source
     size_mult_no_catalyst: float = 0.35    # ... when there is no identifiable driver (pure technical)
     research_min_charts: int = 4           # candidates that must be charted before any entry
+    allow_options: bool = True             # style-controlled (Defensive: false)
+    allow_spreads: bool = True             # debit verticals (short leg covered in the same order)
+    allow_singles: bool = True             # bought calls / puts
+    probe_min: int = 50                    # prompt guidance only
+    probe_max: int = 100
 
 
 LLM_PRESETS = {
@@ -106,7 +111,8 @@ class LLMSettings(BaseModel):
     temperature: float = 0.3
     max_tokens: int = 8192
     max_tool_calls: int = 36
-    context_char_budget: int = 190_000    # ~52k tokens; model is loaded at 64k (8k reserved for output)
+    context_char_budget: int = 190_000    # upper bound; the effective budget is derived from the detected context window (see llm.context_plan)
+    context_tokens: int = Field(default_factory=lambda: int(os.environ.get("LLM_CONTEXT_TOKENS", "0") or 0))  # 0 = auto-detect from the server
     tool_result_max_chars: int = 5_000
     timeout_s: float = 900.0
 
@@ -142,6 +148,10 @@ class WatchSettings(BaseModel):
     expiry_force_close_time: str = "14:30"  # ET, expiration day: close anything still open
     expiry_dne_time: str = "15:45"          # ET, expiration day: file DNE on any long option still held
     assignment_delta: float = 0.85         # short leg |delta| at/above this -> assignment-risk wake
+    study_enabled: bool = True             # off-hours study sessions: learn one curriculum topic, save it to the library
+    study_per_night: int = 2               # bounded: at most this many study sessions per night (rolling 12h)
+    study_start: str = "20:00"             # ET; window may wrap past midnight
+    study_end: str = "06:30"
 
 
 class Settings(BaseModel):

@@ -8,6 +8,7 @@ import httpx
 import trafilatura
 
 from .config import SETTINGS
+from . import providers as P
 
 log = logging.getLogger("munchkin.search")
 
@@ -99,7 +100,24 @@ def web_search(query: str, category: str = "general", max_results: int = 8,
 
 
 def fetch_page(url: str, max_chars: int = 6000) -> str:
-    """Download a page and return its main readable text."""
+    """Download a page and return its main readable text. Falls back to Tavily's extract API when the
+    direct fetch is blocked, errors, or comes back too thin (paywall/JS shells)."""
+    text = _fetch_direct(url, max_chars)
+    thin = text.startswith("ERROR") or len(text) < 400
+    if thin and P.enabled("tavily") and P.get_key("tavily") and P.within_budget("tavily"):
+        try:
+            alt = P.tavily_extract(url, max_chars=max_chars)
+            if len(alt) >= 200 and (text.startswith("ERROR") or len(alt) > len(text) * 1.5):
+                log.info("fetch_page %s served by tavily extract (%d chars)", url, len(alt))
+                return "(fetched via Tavily extract; direct fetch was blocked or thin)\n" + alt + ("\n...[page truncated]" if len(alt) >= max_chars else "")
+        except Exception as e:
+            log.info("tavily extract fallback failed for %s: %s", url, e)
+            if text.startswith("ERROR"):
+                text += f"; Tavily extract also failed: {str(e)[:100]}"
+    return text
+
+
+def _fetch_direct(url: str, max_chars: int) -> str:
     try:
         r = httpx.get(url, timeout=25.0, follow_redirects=True,
                       headers={"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9"})

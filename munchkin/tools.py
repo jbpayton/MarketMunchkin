@@ -48,6 +48,7 @@ class Context:
     plan_set: bool = False
     research: ResearchTracker = field(default_factory=ResearchTracker)
     exits: ExitManager | None = None
+    style: str = "balanced"
 
 
 def _p(name: str, typ: str, desc: str, **extra: Any) -> dict[str, Any]:
@@ -479,7 +480,7 @@ class ToolRegistry:
         def fetch_page_tool(url: str, max_chars: int = 5000) -> str:
             return fetch_page(url, max_chars=min(max_chars, 9000))
 
-        self.add("fetch_page", "Fetch a web page and return its readable text (some sites block bots; then rely on search snippets).",
+        self.add("fetch_page", "Fetch a web page and return its readable text. Blocked or thin pages are retried through Tavily extract automatically; if both fail, rely on search snippets.",
                  _schema({"url": _p("url", "string", "http(s) URL"), "max_chars": _p("max_chars", "integer", "default 5000")}, ["url"]), fetch_page_tool)
 
         def get_fundamentals(symbol: str) -> str:
@@ -643,6 +644,37 @@ class ToolRegistry:
         # ---------------- state of the world
         _CONTEXT_ETFS = ["SPY", "QQQ", "IWM", "DIA", "TLT", "GLD", "USO", "UVXY", "XLK", "SMH", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC", "XBI", "KRE", "ARKK", "IBIT"]
 
+        def list_knowledge() -> str:
+            from .knowledge import KnowledgeBase
+            return KnowledgeBase().index_text(60)
+
+        self.add("list_knowledge", "List the library: durable notes written by study sessions (slug, title, summary, date).", _schema({}, []), list_knowledge)
+
+        def get_knowledge(topic: str) -> str:
+            from .knowledge import KnowledgeBase
+            k = KnowledgeBase().get(topic)
+            if not k:
+                return f"no note for '{topic}' (list_knowledge shows what exists)"
+            return f"# {k['title']} (updated {k['updated'][:16]})\n{k['body']}\n\nSources: " + "; ".join(k["sources"][:8])
+
+        self.add("get_knowledge", "Read one library note in full by slug or title words.", _schema({"topic": _p("topic", "string", "slug or title words")}, ["topic"]), get_knowledge)
+
+        def save_knowledge(topic: str, title: str, body: str, sources: list[str], summary: str = "") -> str:
+            from .knowledge import KnowledgeBase, slugify
+            if c.dry_run:
+                return "dry run: not saved"
+            if len((body or "").strip()) < 300:
+                return "REJECTED: body too short — a note needs the mechanism, how it moves markets, what to watch, and how this book should use it"
+            if not sources or not any(str(x).startswith("http") for x in sources):
+                return "REJECTED: cite at least one URL you actually read (fetch_page/web_search results)"
+            p = KnowledgeBase().save(topic, title, body, [str(x) for x in sources], summary or None)
+            c.journal.add_event("knowledge", f"library note saved: {slugify(topic)} ({len(body)} chars)")
+            return f"saved {p.name} ({len(body)} chars); it now appears in the Library index of every session"
+
+        self.add("save_knowledge", "Save or update a library note (study sessions). Body <= 6000 chars, structured: what it is / how it moves markets / what to watch / how MarketMunchkin should use it. Cite URLs.",
+                 _schema({"topic": _p("topic", "string", "slug, e.g. credit-spreads"), "title": _p("title", "string", "human title"), "body": _p("body", "string", "markdown"),
+                          "sources": _p("sources", "array", "URLs read", items={"type": "string"}), "summary": _p("summary", "string", "one line (optional)")}, ["topic", "title", "body", "sources"]), save_knowledge)
+
         def get_market_context() -> str:
             c.research.note_context()
             snaps = c.market.snapshots(_CONTEXT_ETFS)
@@ -660,6 +692,13 @@ class ToolRegistry:
                 parts.append(scr.regime_report(c.market, c.journal))
             except Exception as e:
                 parts.append(f"regime error: {str(e)[:120]}")
+            try:
+                dials = M.world_dials(M.market_dashboard(), None, None)
+                if dials:
+                    parts.append("CROSS-ASSET DIALS (20-day, -1 headwind .. +1 tailwind; let these direct where you look and how hard you press): "
+                                 + " | ".join(f"{d['label']} {d['score']:+.2f} ({d['value']})" for d in dials))
+            except Exception as e:
+                parts.append(f"dials unavailable: {str(e)[:80]}")
             try:
                 items = c.market.news(None, 12, 18)
                 parts.append("Benzinga general headlines (18h):\n" + (md_table(items, ["time", "symbols", "headline"]) if items else "(none)"))

@@ -266,6 +266,8 @@ class RiskEngine:
                          positions: list[dict], acct_level: int, grade: str | None = None) -> tuple[list[str], dict[str, Any]]:
         info = self._contract_info(symbol)
         v = self.check_option_leg_quality(symbol, info)
+        if not self.L.allow_options or not self.L.allow_singles:
+            v.append("the active trading style does not allow buying single options (Defensive = stock only)")
         if acct_level < 2:
             v.append(f"account options level {acct_level} < 2 required for long options")
         if limit_price is None:
@@ -288,6 +290,8 @@ class RiskEngine:
     def check_mleg(self, legs: list[dict[str, Any]], qty: int, limit_price: float, st: RiskState,
                    positions: list[dict], acct_level: int, grade: str | None = None) -> tuple[list[str], list[dict[str, Any]]]:
         v: list[str] = []
+        if not self.L.allow_options or not self.L.allow_spreads:
+            v.append("the active trading style does not allow spreads")
         if acct_level < 3:
             v.append(f"account options level {acct_level} < 3 required for spreads")
         if limit_price is None or limit_price <= 0:

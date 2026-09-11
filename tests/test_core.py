@@ -270,3 +270,44 @@ def test_provider_config_and_keys(tmp_path, monkeypatch):
     from munchkin.search import _dedupe
     rows = [{"url": "https://a/x"}, {"url": "https://a/x/"}, {"url": "https://b"}, {"url": ""}]
     assert [r["url"] for r in _dedupe(rows, 5)] == ["https://a/x", "https://b"]
+
+
+def test_world_dials_scores_are_bounded_and_signed():
+    from munchkin.macro import world_dials
+    tape = {"spy": {"chg_20d_pct": 3.0}, "hyg": {"chg_20d_pct": 1.0}, "lqd": {"chg_20d_pct": -1.0}, "iwm": {"chg_20d_pct": 9.0},
+            "us10y_yield": {"last": 4.1, "chg_20d_bp": 40.0}, "us3m_yield": {"last": 4.3}, "dollar_index": {"last": 98.0, "chg_20d_pct": -30.0},
+            "vix": {"last": 14.0}, "vix3m": {"last": 16.0}}
+    d = {x["key"]: x for x in world_dials(tape, {"breadth": {"pct_above_sma50": 70}}, None)}
+    assert d["breadth"]["score"] > 0 and d["credit"]["score"] > 0 and d["size"]["score"] == 1.0
+    assert d["rates"]["score"] < 0 and "10y−3m" in d["rates"]["value"]
+    assert d["dollar"]["score"] == 1.0            # clamped
+    assert d["vol"]["score"] > 0 and "term 0.88" in d["vol"]["value"]
+    assert all(-1 <= x["score"] <= 1 for x in d.values())
+
+
+def test_knowledge_base_roundtrip(tmp_path):
+    from munchkin.knowledge import KnowledgeBase, CURRICULUM
+    kb = KnowledgeBase(tmp_path)
+    assert kb.index() == [] and kb.next_topics(2)[0]["slug"] == CURRICULUM[0][0]
+    kb.save("Credit Spreads!", "Credit spreads", "HY minus IG.\nMore text here.", ["https://example.org/a", ""], summary=None)
+    idx = kb.index()
+    assert idx[0]["slug"] == "credit-spreads" and idx[0]["summary"] == "HY minus IG." and idx[0]["sources"] == 1
+    got = kb.get("credit spreads")
+    assert got and got["title"] == "Credit spreads" and got["body"].startswith("HY minus IG.")
+    assert kb.next_topics(30)[-1]["slug"] == "credit-spreads"   # studied topics rotate to the back
+    assert "credit-spreads" in kb.index_text()
+
+
+def test_context_plan_scales_with_window(monkeypatch):
+    from munchkin import llm
+    from munchkin.config import LLMSettings
+    s = LLMSettings(context_tokens=65536, max_tokens=8192, context_char_budget=190_000, tool_result_max_chars=5000)
+    p = llm.context_plan(s)
+    assert p["effective_chars"] == 189_376 and p["tool_result_chars"] == 4983 and p["warning"] is None
+    small = LLMSettings(context_tokens=16384, max_tokens=4096, context_char_budget=190_000, tool_result_max_chars=5000)
+    q = llm.context_plan(small)
+    assert q["effective_chars"] == 9152 + 0 or q["effective_chars"] == 12_000
+    assert q["tool_result_chars"] < 1000 and "below the recommended" in q["warning"]
+    monkeypatch.setattr(llm, "detect_context_tokens", lambda s: (None, "server does not report a context size"))
+    u = llm.context_plan(LLMSettings(context_tokens=0))
+    assert u["effective_chars"] == u["configured_chars"] and "unknown" in u["warning"]

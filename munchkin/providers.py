@@ -132,6 +132,25 @@ def status() -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ Tavily
+def tavily_extract(url: str, max_chars: int = 9000) -> str:
+    """Fetch a page through Tavily's extract endpoint (their crawler gets past many bot walls). One call per URL."""
+    key = get_key("tavily")
+    if not key:
+        raise RuntimeError("tavily key not set")
+    r = httpx.post("https://api.tavily.com/extract", json={"urls": [url], "extract_depth": "basic"},
+                   headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, timeout=40)
+    _count("tavily")
+    if r.status_code != 200:
+        raise RuntimeError(f"tavily extract HTTP {r.status_code}: {r.text[:120]}")
+    d = r.json()
+    res = d.get("results") or []
+    if not res:
+        failed = d.get("failed_results") or []
+        raise RuntimeError("tavily extract: " + (str(failed[0].get("error")) if failed else "no content"))
+    text = (res[0].get("raw_content") or "").strip()
+    return text[:max_chars]
+
+
 def tavily_search(query: str, category: str = "general", max_results: int = 8, time_range: str | None = None) -> list[dict]:
     key = get_key("tavily")
     if not key:

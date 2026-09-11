@@ -82,10 +82,15 @@ options (Alpaca allows fractional quantities only as simple DAY orders). Targets
 rested, because a second sell order would tie up the same shares. `set_exit_levels` trails a stop
 (never lower) or moves a target and replaces the resting order; manual sells cancel it first.
 
-## Dashboard (phone-friendly)
+## Dashboard
 
-`munchkin web` (installed as the `munchkin-web` user service) serves a read-only dashboard on
-port 8787: equity curve and P&L, positions with their resting stops and catalyst grades, open
+`munchkin web` (installed as the `munchkin-web` user service) serves the dashboard on port 8787:
+a desktop-first single-page app (`munchkin/ui/`) that collapses to the phone, with dark, light and
+system themes, the mascot, the agent's reasoning drawn as a timeline and a flow, per-position pages
+with candle charts carrying entry/stop/trigger/target, option payoff and greeks, a Brain page led by
+the state of the world (regime gauge, breadth, sectors, macro tape, BLS prints, calendar), the
+trading-style control, and Config for model, providers and appearance. The previous page is at
+`/legacy`. It shows: equity curve and P&L, positions with their resting stops and catalyst grades, open
 orders, risk state, recent watcher events, every session with its full trace (system/user prompt,
 reasoning, each tool call with arguments and results, final summary), the decisions journal
 with rejections and their reasons, trades, lessons, the world brief, plan and playbook.
@@ -154,6 +159,61 @@ unexplained. `get_market_context` returns index/sector/rates/commodity/vol ETF m
 headlines and web news on markets and geopolitics; the model keeps a persistent "world brief"
 (`set_world_brief`) that is injected into every session so ideas flow top-down from the picture
 to the names. Position caps aggregate stock and options per underlying.
+
+## Trading styles and the rules that never change
+
+The style switch in the dashboard is colour-coded: **Defensive blue, Balanced green, Aggressive red**. Fetches that a site blocks are retried through Tavily's extract API automatically when a Tavily key is set.
+
+Three operator-selected styles (dashboard top bar or Config) change the risk envelope, the
+instruments, the cadence and the agent's brief. The active style applies from the next session.
+
+| | Defensive | Balanced (default) | Aggressive |
+|---|---|---|---|
+| instruments | stock only | stock, bought calls/puts, debit verticals | bought calls/puts first for fast setups; verticals when IV is rich |
+| probes | $50–75 | $50–100 | $100–150 |
+| per position / positions | 25% / 4 | 40% / 5 | 50% / 6 |
+| catalyst grades | confirmed only | speculative ×0.5, none ×0.35 | speculative ×0.75, none ×0.5 |
+| options budget | 0% | 60% of equity | 75% of equity |
+| daily loss breaker | −8% | −15% | −20% |
+| cadence / reasoning | 3 min gap, high | 60 s gap, medium | 60 s gap, events preempt, medium |
+
+Rules that hold in every style and cannot be overridden from the dashboard, the prompt, or the
+model (they live in `munchkin/styles.py` and the risk engine):
+
+- Cash account only: buys use settled cash, never margin, never unsettled proceeds.
+- No shorting stock.
+- Never writes contracts: no naked or credit options. A short leg exists only as the covered leg
+  of a debit vertical opened in the same order, and only where the style allows spreads.
+- No option is held into expiration (wake at 1 DTE, forced close 14:30 ET on expiry day, DNE filed).
+- Position caps, the daily-loss breaker and the kill switch apply everywhere.
+- Every entry needs a dossier, a graded and sourced catalyst, a stop and a target.
+
+## State-of-the-world dials
+
+`get_market_context` (and the Brain page) carry twelve cross-asset dials scored from the 20-day tape, -1 (headwind) to +1
+(tailwind): breadth, trend (SPY), volatility (VIX level and term structure), credit (HYG vs LQD), small caps (IWM vs SPY),
+participation (RSP vs SPY), growth vs broad (QQQ vs SPY), rates (10-year change and the 10y-3m curve), dollar, copper/gold,
+oil and crypto. The system prompt tells the agent to let them direct where it looks and how hard it presses; the overview
+shows the top eight as compact bars, the Brain shows all of them with notes plus the next scheduled prints and FOMC dates.
+
+## Study mode (off hours)
+
+When the task queue is empty inside the study window (`[watch] study_start`/`study_end`, default 20:00-06:30 ET) the daemon
+runs bounded **study sessions**: the agent picks one topic from the curriculum in `munchkin/knowledge.py` (inflation prints,
+the Fed's reaction function, credit spreads, options market structure, event-day patterns, cash-account mechanics, ...) or a gap
+it noticed, spends at most six searches and four page fetches on primary sources, and writes a note with `save_knowledge`.
+Notes live in `data/knowledge/<slug>.md`; the index is in every system prompt and `get_knowledge` returns the full note.
+At most `study_per_night` sessions run per rolling 12 hours (default 2), so it is a nightly seminar, not an all-night crawl.
+Trading tools are disabled in study sessions.
+
+## Context window
+
+The transcript budget adapts to the model. On start the client asks the serving stack for the context size (LM Studio reports the
+loaded context, Ollama `num_ctx`, OpenRouter the model card, vLLM `max_model_len`; OpenAI/Anthropic use known sizes) and derives
+`effective_chars = (tokens - max_tokens - ~10k tool overhead) x 4`, capped by `[llm] context_char_budget`. Tool results are scaled
+down in proportion so a smaller window is compacted harder instead of failing. Under about 32k tokens the dashboard shows a
+warning; under 16k the agent loses most of its context between tool calls. If the server does not report a size, set
+`LLM_CONTEXT_TOKENS` in `.env`. The Model card on the Config tab shows what was detected.
 
 ## Risk engine
 
