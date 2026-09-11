@@ -65,3 +65,4 @@ svg text{font-family:var(--mono)}
 .tr .box{min-width:0;overflow-wrap:anywhere}.tr .box .h>span{min-width:0}.tr .box .h .t{overflow-wrap:anywhere}
 @media (max-width:900px){.tr{grid-template-columns:36px 14px minmax(0,1fr)}.tr .ts{font-size:10px}}
 .seg button{white-space:nowrap}
+.grid>.card{display:flex;flex-direction:column}
