@@ -423,6 +423,37 @@ def plan() -> None:
 
 
 @app.command()
+def skills(approve: Optional[str] = typer.Option(None, help="approve an agent-written draft by name"),
+           enable: Optional[str] = typer.Option(None, help="enable a skill by name"),
+           disable: Optional[str] = typer.Option(None, help="disable a skill by name"),
+           show: Optional[str] = typer.Option(None, help="print a skill's full procedure")) -> None:
+    """List installed skills (skills/ in the repo, data/skills/ for agent drafts) and manage them."""
+    from .skills import SkillStore
+    st = SkillStore()
+    if approve:
+        console.print("approved" if st.approve(approve) else f"[red]cannot approve '{approve}' (only agent drafts need approval)[/red]")
+    if enable:
+        console.print("enabled" if st.set_enabled(enable, True) else f"[red]no skill '{enable}'[/red]")
+    if disable:
+        console.print("disabled" if st.set_enabled(disable, False) else f"[red]no skill '{disable}'[/red]")
+    if show:
+        sk = st.get(show)
+        console.print(Panel(sk.body, title=f"{sk.name} — {sk.description}") if sk else f"[red]no skill '{show}'[/red]")
+        return
+    rows = st.all()
+    if not rows:
+        console.print("no skills installed (add folders under skills/)")
+    for sk in rows:
+        flag = "[green]active[/green]" if sk.status == "active" else "[yellow]draft[/yellow]"
+        if not sk.enabled:
+            flag += " [red]disabled[/red]"
+        extra = (f"  scripts: {', '.join(sk.scripts)}" if sk.scripts else "") + (f"  resources: {', '.join(sk.resources)}" if sk.resources else "")
+        console.print(f"[bold]{sk.name}[/bold] ({sk.source}) {flag}  {sk.description}{extra}")
+    for e in st.errors:
+        console.print(f"[red]invalid: {e}[/red]")
+
+
+@app.command()
 def halt(resume: bool = typer.Option(False, help="remove the halt")) -> None:
     """Block all new entries (exits still allowed) until resumed."""
     if resume:

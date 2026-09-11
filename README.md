@@ -189,6 +189,7 @@ munchkin journal trades|decisions|lessons|sessions|notes
 munchkin plan | munchkin playbook
 munchkin screener refresh | backtest --years 3 | earnings | regime | intraday --setups
 munchkin screener query "rsi14 < 30 and avg_dollar_vol20_m > 50" --sort rsi14 --asc
+munchkin skills [--show NAME] [--approve NAME] [--enable NAME] [--disable NAME]   # installed skills
 munchkin halt | munchkin halt --resume             # block new entries; exits keep working
 munchkin baseline --reset                          # re-anchor the virtual account to the broker balance
 ```
