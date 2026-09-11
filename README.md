@@ -91,9 +91,11 @@ The active style applies from the next session.
 - **Pre-market (08:45 ET).** Top-down: market context, overnight developments, today's data and Fed calendar,
   earnings, geopolitics. The agent rewrites its world brief with sources, reviews news on every holding, and
   sets a plan with concrete triggers.
-- **Market hours.** Continuous sessions, one starting a minute after the last one ends. A watcher polls every
+- **Market hours.** Continuous sessions, one starting a minute after the last one ends. A full opportunity board
+  (rank, research, arm) runs at most every 30 minutes; the sessions in between get a monitor duty: check every held
+  and armed name against the tape and news, change something only if a thesis changed. A watcher polls every
   60 seconds and preempts with an **event session** when a resting stop fills, a target trades, a holding or the
-  index moves, headlines land on a position, or an option nears expiry.
+  index moves, headlines land on a position, or an option nears expiry. Operator requests from Telegram jump the queue.
 - **Armed entries.** Instead of chasing, the agent arms instructions: "UBER call spread, $120, above 73.50, not
   before 08:35, only if SPY is not down more than 1%". The watcher executes them within a minute of the trigger
   and the option contracts are resolved at fire time.
@@ -108,7 +110,9 @@ The active style applies from the next session.
 ## Under the hood
 
 - **Research gate and catalyst grades.** `confirmed` (primary source or several reputable outlets) sizes at
-  1.0, `speculative` at 0.5, `none` (an unexplained move) at 0.35. Grades multiply the position cap.
+  1.0, `speculative` at 0.5, `none` (an unexplained move) at 0.35. Grades multiply the position cap. Evidence
+  (charts, news, dossiers, scans) is stamped and persisted, and counts for `research_window_hours` (3h) across
+  sessions, so a session six minutes after the last one does not have to redo the homework to re-arm an idea.
 - **State of the world.** A transparent regime score (SPY trend, breadth, VIX level and term structure), sector
   table, macro tape from yfinance, BLS prints from the BLS API, Fed releases from the Fed's RSS, twelve
   cross-asset dials, and the agent's own sourced brief. The prompt tells it to let these direct where it looks.
@@ -124,6 +128,13 @@ The active style applies from the next session.
   allowlist.
 - **Journal.** SQLite memory: sessions with full traces, decisions and rejections, fills, round-trip trades,
   lessons (capped in length), notes, tasks, the plan, the playbook, exits, equity, breadth and IV history.
+- **Style switching.** Flipping the style writes one setting. The next session and the watcher pick up the new
+  caps, instrument flags, breaker and cadence at once; open positions are never touched, and armed entries are
+  checked against the new envelope when they fire rather than resized.
+- **Broker outages.** When Alpaca's clock or data backend fails (it has, with the status page green), the clock is
+  derived from New York time, quotes fall back to yfinance tagged as such, a circuit breaker fast-fails data calls
+  for 90 s instead of every tool waiting 20 s, the dashboard serves its last good snapshot behind a banner, and the
+  watcher never opens a position on a fallback quote. Resting stops live at the broker throughout.
 - **Exits.** Every entry carries a numeric stop and target. A protective stop rests at the broker (GTC for whole
   shares, DAY re-armed each morning for fractional shares and options). Targets are watched, not rested. Stops
   only ever trail up.
@@ -208,6 +219,8 @@ munchkin plan | munchkin playbook
 munchkin screener refresh | backtest --years 3 | earnings | regime | intraday --setups
 munchkin screener query "rsi14 < 30 and avg_dollar_vol20_m > 50" --sort rsi14 --asc
 munchkin skills [--show NAME] [--approve NAME] [--enable NAME] [--disable NAME]   # installed skills
+munchkin telegram                                  # the command-channel poller (runs as the munchkin-telegram service)
+munchkin notify "text" [--kind fills]              # test a push to the paired chats
 munchkin halt | munchkin halt --resume             # block new entries; exits keep working
 munchkin baseline --reset                          # re-anchor the virtual account to the broker balance
 ```
@@ -216,12 +229,32 @@ munchkin baseline --reset                          # re-anchor the virtual accou
 
 | where | what |
 |---|---|
-| `.env` | `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_PAPER`, `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_CONTEXT_TOKENS`, `SEARXNG_URL`, provider keys, `MUNCHKIN_WEB_TOKEN` |
+| `.env` | `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_PAPER`, `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_CONTEXT_TOKENS`, `SEARXNG_URL`, `TAVILY_API_KEY`, `FINNHUB_API_KEY`, `TELEGRAM_BOT_TOKEN`, `MUNCHKIN_WEB_TOKEN` |
 | `munchkin.toml` `[llm]` | reasoning effort per phase, tool budget, transcript budget |
-| `munchkin.toml` `[risk]` | starting capital, caps, catalyst multipliers, option DTE / OI / spread filters, research gate |
+| `munchkin.toml` `[risk]` | starting capital, caps, catalyst multipliers, option DTE / OI / spread filters, research gate (`research_min_charts`, `research_window_hours`) |
 | `munchkin.toml` `[schedule]` `[watch]` | session times, cadence, wake thresholds, expiry guard, off-hours windows, study mode |
 | `data/llm.json`, `data/search.json` | dashboard overrides for the model and the provider chain (no restart needed) |
+| `data/telegram.json`, `data/skills.json` | paired chats and alert toggles; skill enable/approve state |
+| `skills/`, `data/skills/`, `data/knowledge/` | operator skills, agent-written skill drafts, the study library |
 | dashboard Config tab | trading style, model, appearance, providers, kill switch |
+
+## Code map
+
+| module | what it does |
+|---|---|
+| `agent.py` | prompts per phase, the system prompt (rules, style, dials, skills, library, playbook, lessons), session runner |
+| `tools.py` | the ~55 tools the model sees: account, quotes, charts, screener, options, news, macro, research, orders, exits, arms, journal, skills, analysis |
+| `risk.py`, `styles.py` | the risk engine and the three style envelopes over the fixed rules |
+| `llm.py` | OpenAI-compatible tool loop, context-window detection, compaction |
+| `cli.py` | the `munchkin` CLI: daemon loop (sessions, watcher, duties, study), web, telegram, screener, journal |
+| `watch.py`, `entries.py`, `exits.py`, `optentry.py` | the watcher, armed entries, resting stops and targets, option contract resolution and spreads |
+| `market.py`, `broker.py`, `macro.py`, `providers.py`, `search.py` | Alpaca data and trading, yfinance/BLS/Fed, Tavily/Finnhub/StockTwits, SearXNG, the feed breaker |
+| `screener.py`, `analytics.py`, `indicators.py` | the universe table, regime, breadth, sectors, setups and backtests |
+| `research.py`, `knowledge.py`, `skills.py` | the research gate, the study library, the skills store |
+| `journal.py` | SQLite memory: sessions, traces, decisions, fills, trades, lessons, tasks, exits, equity, history |
+| `web.py`, `ui/` | the dashboard API and the single-page app |
+| `telegram.py` | alerts and the command channel |
+| `sandbox/` | the interpreter that runs model-written analysis and skill scripts |
 
 ## Security notes
 
