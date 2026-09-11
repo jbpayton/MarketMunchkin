@@ -397,8 +397,8 @@ class Lab:
         # lifecycle: pass -> tested; fail -> rejected; two inconclusives -> rejected
         h = self.get(hid)
         prior = [t["verdict"] for t in (h or {}).get("tests", [])]
-        if verdict == "pass":
-            new = "tested"
+        if verdict == "pass" or (h and h["status"] == "tested"):
+            new = "tested"            # a later non-pass never demotes a claim that already passed; the record shows it
         elif verdict == "fail" or prior.count("inconclusive") >= 2:
             new = "rejected"
         else:
