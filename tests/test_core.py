@@ -531,3 +531,81 @@ def test_watcher_takes_stock_target_mechanically():
     assert b.orders == [("UBER", "sell", 1.377, "market")] and x.cancelled == ["UBER"] and j.kv["exits:UBER"] is None
     assert actions and actions[0].startswith("TARGET TAKEN: UBER sold 1.377") and events and "review the thesis" in events[0]
     assert j.decisions[0][0][1] == "close" and j.decisions[0][1]["meta"]["mechanical"] is True
+
+
+def _fake_market(seed=1):
+    import numpy as np, pandas as pd
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2024-01-02", periods=520, tz="America/New_York")
+
+    class M:
+        def bars(self, sym, tf, limit=780):
+            syms = sym if isinstance(sym, list) else [sym]
+            frames = []
+            for s in syms:
+                r = rng.normal(0.0004, 0.012, len(idx)) + (0.002 if s == "UP" else 0.0)
+                close = 100 * np.cumprod(1 + r)
+                df = pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99, "close": close, "volume": 1e6, "vwap": close, "trade_count": 100}, index=idx[-limit:] if limit < len(idx) else idx)
+                df = df.iloc[-limit:]
+                if isinstance(sym, list):
+                    df["symbol"] = s; frames.append(df.set_index("symbol", append=True).swaplevel())
+                else:
+                    return df
+            return pd.concat(frames)
+    return M()
+
+
+def test_lab_ledger_spec_and_gates(tmp_path):
+    import sqlite3
+    from munchkin.lab import Lab, validate_spec, judge, parse_custom_result
+    from munchkin.config import LabSettings
+
+    class J:
+        def __init__(self):
+            self.conn = sqlite3.connect(str(tmp_path / "lab.db"), check_same_thread=False); self.conn.row_factory = sqlite3.Row
+    lab = Lab(J())
+    r = lab.propose("Policy threat dips revert", "After a policy threat headline pushes SPY down more than 1.5%, SPY is higher five sessions later more often than after other 1.5% down days.", "operator", "test")
+    assert r["status"] == "proposed" and r["id"] == 1
+    dup = lab.propose("Threat dips revert", "When a policy threat headline pushes SPY down more than 1.5%, SPY is higher five sessions later more often than after other down days.", "agent")
+    assert "duplicate_of" in dup
+    bad = validate_spec({"trigger": {"kind": "declarative", "conditions": {"nope": {"lte": 1}}}, "universe": "SPY", "side": "short", "holding": {"sessions": 0}, "expected": {}})
+    assert len(bad) >= 4
+    spec = {"trigger": {"kind": "declarative", "conditions": {"spy_chg_pct": {"lte": -1.5}}}, "universe": ["SPY"], "side": "long", "holding": {"sessions": 5}, "expected": {"horizon": "+5d", "effect_pct": 1.0}}
+    assert validate_spec(spec) == [] and lab.specify(1, spec)["status"] == "specified"
+    L = LabSettings()
+    ok = {"n": 25, "mean": 1.8, "hit": 70, "worst": -3.0, "control": {"n": 40, "mean": 0.9, "hit": 55}, "halves": [{"mean": 1.5}, {"mean": 2.1}]}
+    assert judge(ok, "event_study", spec, L)[0] == "pass"
+    assert judge({**ok, "n": 5}, "event_study", spec, L)[0] == "inconclusive"          # small sample: not evidence against
+    assert judge({**ok, "mean": 0.2, "hit": 40}, "event_study", spec, L)[0] == "fail"    # worse than the control on both counts
+    assert judge({**ok, "mean": 1.0}, "event_study", spec, L)[0] == "inconclusive"
+    assert judge({**ok, "halves": [{"mean": 3.0}, {"mean": -0.5}]}, "event_study", spec, L)[0] == "inconclusive"
+    assert judge({**ok, "control": {}}, "event_study", spec, L)[0] == "inconclusive"
+    lab.record_test(1, "event_study", {}, ok, "pass", ["ok"])
+    assert lab.get(1)["status"] == "tested"
+    lab.record_test(1, "event_study", {}, {**ok, "mean": 1.0}, "inconclusive", ["x"])   # a later inconclusive does not demote a tested claim
+    assert lab.get(1)["status"] == "tested" and "verdict pass" in lab.describe(1)
+    assert lab.set_status(1, "rejected", "operator") and lab.get(1)["status"] == "rejected"
+    assert parse_custom_result("junk\nRESULT: {\"n\": 30, \"mean\": 1.2, \"hit\": 60, \"worst\": -4, \"control\": {\"n\": 100, \"mean\": 0.3, \"hit\": 52}}")["kind"] == "custom"
+    assert "error" in parse_custom_result("RESULT: {\"n\": 3}")
+
+
+def test_lab_templates_run_with_controls(tmp_path):
+    import sqlite3
+    from munchkin.lab import Lab, run_test
+    m = _fake_market()
+
+    class J:
+        def __init__(self):
+            self.conn = sqlite3.connect(str(tmp_path / "lab2.db"), check_same_thread=False); self.conn.row_factory = sqlite3.Row
+    lab = Lab(J())
+    hid = lab.propose("Big down days in UP revert", "When SPY falls 1.5% or more in a day, the name UP is higher five sessions later than the average down day suggests.", "agent")["id"]
+    lab.specify(hid, {"trigger": {"kind": "declarative", "conditions": {"spy_chg_pct": {"lte": -1.5}}}, "universe": ["UP"], "side": "long", "holding": {"sessions": 5}, "expected": {"horizon": "+5d", "effect_pct": 1.0}})
+    rec = run_test(lab, m, hid, "event_study", {"control_chg_lte": -1.0})
+    r = rec["result"]
+    assert r["n"] > 0 and "control" in r and r["control"]["n"] > 0 and "halves" in r and rec["verdict"] in ("pass", "fail", "inconclusive")
+    hid2 = lab.propose("Oversold screen", "Names with rsi14 under 30 that are still above the 200-day average outperform over ten sessions versus all days.", "agent")["id"]
+    lab.specify(hid2, {"trigger": {"kind": "screen", "expr": "rsi14 < 35"}, "universe": ["UP", "DN"], "side": "long", "holding": {"sessions": 10}, "expected": {"horizon": "+10d", "effect_pct": 1.0}})
+    rec2 = run_test(lab, m, hid2, "screen_backtest", {"symbols": ["UP", "DN"], "years": 2})
+    r2 = rec2["result"]
+    assert r2.get("kind") == "screen_backtest" and ("n" in r2) and (r2.get("n", 0) == 0 or r2["control"]["n"] > 0)
+    assert len(lab.get(hid2)["tests"]) == 1

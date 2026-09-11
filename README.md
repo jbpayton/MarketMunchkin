@@ -154,6 +154,17 @@ The active style applies from the next session.
   Finnhub (news, earnings calendar) and StockTwits (social buzz), all on free tiers with monthly budgets,
   managed from the Config tab. Keys go to `.env`, never to the model.
 
+## The Lab (phase one)
+
+Claims about the market get a lifecycle instead of a diary entry. A hypothesis is proposed by you (Brain page, or
+`/hypo` on Telegram) or by the agent (study and post-market sessions), specified as a trigger, a universe, a horizon
+and an expected effect, and tested at night in lab sessions against history **with a control**: an event study
+compares the claimed events with every day that met the same mechanical condition regardless of the story; a screen
+backtest compares signal days with the unconditional baseline. Gates (`[lab]` in `munchkin.toml`): sample size, edge
+over the control, hit-rate edge, agreement between halves of the window, bounded worst case. Rejected claims stay in
+the ledger with their numbers and are not re-proposed. Shadow runs, promotion to budgeted strategies and the decision
+inbox are the next phases; promotion and demotion are yours alone. The design is in `docs/hypothesis-lab-spec.md`.
+
 ## Skills
 
 Skills are packaged procedures the agent loads on demand, in the open Agent Skills format: a folder with a `SKILL.md`

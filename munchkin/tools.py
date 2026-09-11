@@ -676,6 +676,85 @@ class ToolRegistry:
                  _schema({"topic": _p("topic", "string", "slug, e.g. credit-spreads"), "title": _p("title", "string", "human title"), "body": _p("body", "string", "markdown"),
                           "sources": _p("sources", "array", "URLs read", items={"type": "string"}), "summary": _p("summary", "string", "one line (optional)")}, ["topic", "title", "body", "sources"]), save_knowledge)
 
+        # ---------------- the lab: hypotheses -> tests -> (operator) promotion
+        SPEC_DOC = ("spec = {trigger: {kind: 'declarative', conditions: {spy_chg_pct: {lte: -1.5}}} | {kind: 'dates', dates: ['2025-04-04', ...]} | "
+                    "{kind: 'screen', expr: 'rsi14 < 30 and sma200_dist_pct > -6'}, universe: ['SPY'] | 'screener:sector=Energy', side: 'long' | 'bearish', "
+                    "holding: {sessions: 5, stop_pct: 3}, expected: {horizon: '+5d', effect_pct: 1.5}, expression: 'stock' | 'call' | 'put' | 'call_spread' | 'put_spread'}")
+
+        def propose_hypothesis(title: str, statement: str) -> str:
+            from .lab import Lab
+            r = Lab(c.journal).propose(title, statement, origin="agent", origin_ref=f"session {c.session_id}")
+            if r.get("error"):
+                return "REJECTED: " + r["error"]
+            c.journal.add_event("lab", f"hypothesis #{r['id']} proposed by the agent: {title[:100]}")
+            return f"hypothesis #{r['id']} recorded ({r['status']}). Next: specify_hypothesis with a spec, then run_hypothesis_test. {SPEC_DOC}"
+
+        self.add("propose_hypothesis", "Record a falsifiable claim about the market in the Lab ledger (what happens, when, to what, over what horizon). Duplicates of existing or rejected claims are refused with a pointer.",
+                 _schema({"title": _p("title", "string", "short name"), "statement": _p("statement", "string", "the claim, one paragraph, testable")}, ["title", "statement"]), propose_hypothesis)
+
+        def specify_hypothesis(id: int, spec: dict[str, Any]) -> str:
+            from .lab import Lab
+            r = Lab(c.journal).specify(int(id), spec)
+            if r.get("error"):
+                return "REJECTED: " + r["error"] + ("; " + "; ".join(r.get("problems", [])) if r.get("problems") else "") + f". {SPEC_DOC}"
+            return f"hypothesis #{id} specified. Now run_hypothesis_test(id={id}, kind='event_study' | 'screen_backtest' | 'custom')."
+
+        self.add("specify_hypothesis", "Attach a testable specification to a hypothesis. " + SPEC_DOC,
+                 _schema({"id": _p("id", "integer", "hypothesis id"), "spec": _p("spec", "object", "the specification object")}, ["id", "spec"]), specify_hypothesis)
+
+        def list_hypotheses(status: str = "") -> str:
+            from .lab import Lab, STATUSES
+            lab = Lab(c.journal)
+            if status and status not in STATUSES:
+                return f"status must be one of {STATUSES}"
+            rows = lab.list(status or None, 40)
+            return "\n".join(f"- #{h['id']} [{h['status']}] {h['title']} ({h['origin']}, {h['updated_at'][:10]})" for h in rows) or "(no hypotheses)"
+
+        self.add("list_hypotheses", "List Lab hypotheses (optionally by status: proposed, specified, tested, shadowing, live, paused, retired, rejected).",
+                 _schema({"status": _p("status", "string", "filter (optional)")}, []), list_hypotheses)
+
+        def get_hypothesis(id: int) -> str:
+            from .lab import Lab
+            return Lab(c.journal).describe(int(id))
+
+        self.add("get_hypothesis", "Full record of one hypothesis: statement, spec, every test with its control, shadow signals, notes.",
+                 _schema({"id": _p("id", "integer", "hypothesis id")}, ["id"]), get_hypothesis)
+
+        def run_hypothesis_test(id: int, kind: str, params: dict[str, Any] | None = None, code: str = "", symbols: list[str] | None = None, bars: int = 780) -> str:
+            from .lab import Lab, run_test
+            lab = Lab(c.journal)
+            out = None
+            if kind == "custom":
+                if not code.strip():
+                    return "custom tests need code that prints RESULT: {n, mean, hit, worst, control: {n, mean, hit}} (sandbox rules as run_analysis)"
+                dataset = _build_dataset(symbols, "1D", bars, True, None)
+                out = SB.run(code, dataset, timeout_s=60, max_chars=9000)
+            rec = run_test(lab, c.market, int(id), kind, params, c.session_id, custom_output=out)
+            if rec.get("error"):
+                return "ERROR: " + rec["error"]
+            r = rec["result"]; ctl = r.get("control") or {}
+            head = f"test #{rec['test_id']} on hypothesis #{id}: verdict {rec['verdict'].upper()} ({'; '.join(rec['reasons'])}); hypothesis is now {rec['status']}."
+            if r.get("error"):
+                return head + f" (result error: {r['error']})" + (f"\n{out[-1500:]}" if out else "")
+            body = (f"\nn={r.get('n')} mean {r.get('mean')}% median {r.get('median')}% hit {r.get('hit')}% worst {r.get('worst')}% at {r.get('horizon', '?')}d"
+                    f"\ncontrol: n={ctl.get('n')} mean {ctl.get('mean')}% hit {ctl.get('hit')}% ({ctl.get('definition', '')})"
+                    + (f"\nhalves: {[x.get('mean') for x in r['halves']]}" if r.get("halves") else "")
+                    + (f"\nby horizon: " + ", ".join(f"{k} {v.get('mean')}%/{v.get('hit')}%" for k, v in r.get("by_horizon", {}).items()) if r.get("by_horizon") else ""))
+            c.journal.add_event("lab", f"hypothesis #{id} {kind}: {rec['verdict']} (n={r.get('n')}, edge {round((r.get('mean') or 0) - (ctl.get('mean') or 0), 2)}pp)")
+            return head + body + "\nA pass moves it to 'tested'; the operator decides on shadowing and promotion. Record what you learned with note_hypothesis."
+
+        self.add("run_hypothesis_test", "Test a specified hypothesis against history with a control. kind=event_study (dates or a spy_chg_pct condition replayed; params: dates, symbols, reference, control_chg_lte), screen_backtest (params: expr, symbols, max_symbols, years), or custom (your own sandbox code printing RESULT: {...}).",
+                 _schema({"id": _p("id", "integer", "hypothesis id"), "kind": _p("kind", "string", "event_study | screen_backtest | custom"), "params": _p("params", "object", "template parameters (optional)"),
+                          "code": _p("code", "string", "custom only: sandbox code"), "symbols": _p("symbols", "array", "custom only: bars to preload", items={"type": "string"}), "bars": _p("bars", "integer", "custom only: daily bars per symbol")},
+                         ["id", "kind"]), run_hypothesis_test)
+
+        def note_hypothesis(id: int, text: str) -> str:
+            from .lab import Lab
+            return f"noted on #{id}" if Lab(c.journal).note(int(id), text) else f"no hypothesis #{id}"
+
+        self.add("note_hypothesis", "Append a note to a hypothesis (what the test showed, what to try next, why it was left).",
+                 _schema({"id": _p("id", "integer", "hypothesis id"), "text": _p("text", "string", "note")}, ["id", "text"]), note_hypothesis)
+
         def get_market_context() -> str:
             c.research.note_context()
             snaps = c.market.snapshots(_CONTEXT_ETFS)

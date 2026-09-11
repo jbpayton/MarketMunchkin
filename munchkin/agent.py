@@ -56,7 +56,14 @@ PHASE_INSTRUCTIONS = {
         "prefer primary sources (Fed, BLS, Treasury, exchanges, CBOE, academic/central-bank papers) and reputable explainers. "
         "Then write the note with save_knowledge: what it is, the mechanism, how it moves markets (with a historical example or two), "
         "what to watch (data, tickers, thresholds), and how MarketMunchkin should use it given its cash-only, short-horizon book. "
-        "If the study surfaces a concrete, checkable idea for the book, add_task it. Do not touch positions or the plan."),
+        "Finish by stating ONE testable claim you learned as propose_hypothesis (or say why none follows). Do not touch positions or the plan."),
+    "lab": (
+        "LAB session (off hours, no trading). Work ONE hypothesis from the task: if it is 'proposed', write its spec with specify_hypothesis "
+        "(the trigger must be computable from data we have; the universe explicit; the horizon and expected effect stated); then run the "
+        "matching test with run_hypothesis_test: event_study for date or index-move triggers, screen_backtest for screener expressions, "
+        "custom only when neither fits (your code must print RESULT: {...} with a control). Read the verdict honestly: the control is the "
+        "point, a claim that only matches 'buy any dip' is not a finding. Record the takeaway with note_hypothesis in two lines. Do not "
+        "propose new hypotheses in this session and do not touch positions or the plan."),
     "reflect": (
         "REFLECTION session (no orders). This is your room to think. Step back from the tape: what have you actually "
         "observed across recent sessions and trades, which of your beliefs held up, which did not, what is the market "
@@ -84,6 +91,16 @@ def _skills_block() -> str:
         return SkillStore().index_text()
     except Exception as e:
         return f"(skills unavailable: {e})"
+
+
+def _lab_block() -> str:
+    try:
+        from .lab import Lab
+        from .journal import Journal  # noqa: F401
+        j = Journal()
+        return Lab(j).index_text(12)
+    except Exception as e:
+        return f"(lab unavailable: {e})"
 
 
 def _library_block() -> str:
@@ -201,6 +218,10 @@ search the news for the driver before trading anything correlated with it.
 Print days -> print-day. Expressing an idea -> armed-entries and option-expression. Inside 2 DTE -> expiry-and-assignment.
 The first 30 minutes -> opening-range. Post-market -> post-trade-review. A proven procedure can be promoted with save_skill (draft until approved).
 
+## Lab (claims under test; get_hypothesis <id> for the record; the operator alone promotes or demotes)
+{_lab_block()}
+A claim that is really a hypothesis (a trigger, a universe, a horizon, an expected effect) goes to propose_hypothesis, not record_lesson.
+
 ## Library (durable notes from study sessions; get_knowledge <slug> for the full note)
 {_library_block()}
 
@@ -292,7 +313,7 @@ def make_context(dry_run: bool = False, allow_trading: bool = True, phase: str =
 def run_session(phase: str = "intraday", task: str | None = None, dry_run: bool = False, allow_trading: bool = True,
                 on_event: Callable[[str, dict[str, Any]], None] | None = None, refresh_screener: bool | None = None,
                 memory_writes: bool = True) -> LoopResult:
-    if phase in ("reflect", "study"):
+    if phase in ("reflect", "study", "lab"):
         allow_trading = False
     ctx = make_context(dry_run=dry_run, allow_trading=allow_trading, phase=phase)
     ctx.memory_writes = memory_writes and not dry_run

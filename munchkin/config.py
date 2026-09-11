@@ -157,12 +157,28 @@ class WatchSettings(BaseModel):
     study_end: str = "06:30"
 
 
+class LabSettings(BaseModel):
+    """Gates for the hypothesis lab (docs/hypothesis-lab-spec.md). Promotion is never automatic."""
+    min_events: int = 20               # event-study sample floor
+    min_signals: int = 30              # screen-backtest sample floor
+    min_edge_pct: float = 0.5          # mean effect over the control at the stated horizon, percentage points
+    min_hit_edge_pts: float = 10.0     # hit-rate over the control, points
+    worst_mult: float = 3.0            # worst single outcome must be >= -worst_mult x mean
+    shadow_min_signals: int = 10
+    shadow_min_weeks: int = 4
+    option_shadow_min_signals: int = 20
+    option_shadow_min_weeks: int = 8
+    lab_sessions_per_night: int = 4
+    decline_cooldown_days: int = 30
+
+
 class Settings(BaseModel):
     searxng_url: str = Field(default_factory=lambda: os.environ.get("SEARXNG_URL", "http://127.0.0.1:8088"))
     llm: LLMSettings = LLMSettings()
     risk: RiskLimits = RiskLimits()
     schedule: ScheduleSettings = ScheduleSettings()
     watch: WatchSettings = WatchSettings()
+    lab: LabSettings = LabSettings()
     screener_universe_extra: list[str] = []
 
 

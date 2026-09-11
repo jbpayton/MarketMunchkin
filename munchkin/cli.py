@@ -195,6 +195,22 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         cutoff = (dt.datetime.now() - dt.timedelta(hours=12)).isoformat(timespec="minutes")
         return sum(1 for r in j.sessions(12) if r.get("phase") == "study" and (r.get("started_at") or "") >= cutoff)
 
+    def _lab_done_tonight() -> int:
+        cutoff = (dt.datetime.now() - dt.timedelta(hours=12)).isoformat(timespec="minutes")
+        return sum(1 for r in j.sessions(20) if r.get("phase") == "lab" and (r.get("started_at") or "") >= cutoff)
+
+    def _lab_task() -> str | None:
+        """Oldest hypothesis that needs work: proposed (needs a spec + test) or specified (needs a test)."""
+        from .lab import Lab
+        lab = Lab(j)
+        for status in ("specified", "proposed"):
+            rows = lab.list(status, 50)
+            if rows:
+                h = rows[-1]
+                return (f"LAB: hypothesis #{h['id']} '{h['title']}' is {status} (origin {h['origin']}). Statement: {h['statement'][:600]}. "
+                        + ("Run the matching test." if status == "specified" else "Write the spec, then run the matching test."))
+        return None
+
     def _rotation_task() -> str:
         """State-aware duty for a session with no event and an empty queue. The opportunity board is the default;
         housekeeping items run only when they are actually stale."""
@@ -424,6 +440,8 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                     picks = KnowledgeBase().next_topics(3)
                     _run("study", "STUDY: pick ONE topic — " + "; ".join(f"{p['title']} [{p['slug']}; {p['why']}; last studied {p['last'][:10]}]" for p in picks)
                          + " — or a gap you noticed in recent sessions. Budget: at most 6 searches and 4 page fetches. Finish with save_knowledge.")
+                elif _lab_done_tonight() < SETTINGS.lab.lab_sessions_per_night and _lab_task():
+                    _run("lab", _lab_task())
                 elif _in_offhours(now, is_td) and j.sessions_today("reflect") < W.max_reflect_per_day:
                     _run("reflect", None)
                 else:
@@ -521,6 +539,25 @@ def notify(text: str, kind: str = typer.Option("fills", help="fills | errors | b
     """Send a test message to the paired Telegram chats."""
     from .telegram import notify as _notify
     console.print("sent" if _notify(text, kind=kind, force=True) else "[red]not sent: token missing, no paired chat, or API error[/red]")
+
+
+@app.command()
+def lab(show: Optional[int] = typer.Option(None, help="print one hypothesis with its tests"),
+        status: Optional[str] = typer.Option(None, help="filter the list by status"),
+        reject: Optional[int] = typer.Option(None, help="reject a hypothesis (operator)"),
+        reopen: Optional[int] = typer.Option(None, help="move a rejected/retired hypothesis back to proposed")) -> None:
+    """The hypothesis ledger: list, show, reject, reopen. Promotion and demotion are operator decisions (dashboard / Telegram)."""
+    from .journal import Journal
+    from .lab import Lab
+    lab = Lab(Journal())
+    if reject:
+        console.print("rejected" if lab.set_status(reject, "rejected", "operator (cli)") else "[red]no such hypothesis[/red]")
+    if reopen:
+        console.print("reopened" if lab.set_status(reopen, "proposed", "operator (cli)") else "[red]no such hypothesis[/red]")
+    if show:
+        console.print(Panel(lab.describe(show), title=f"hypothesis #{show}"))
+        return
+    console.print(lab.index_text(60) if not status else "\n".join(f"- #{h['id']} [{h['status']}] {h['title']}" for h in lab.list(status, 100)) or "(none)")
 
 
 @app.command()

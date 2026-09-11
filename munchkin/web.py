@@ -592,6 +592,50 @@ async def api_stream():
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.get("/api/lab")
+def api_lab():
+    from .lab import Lab, STATUSES
+    lab = Lab(ctx().journal)
+    rows = lab.list(limit=80)
+    for h in rows:
+        t = lab.conn.execute("SELECT kind, verdict, reasons, result_json, created_at FROM hypothesis_tests WHERE hypothesis_id=? ORDER BY id DESC LIMIT 1", (h["id"],)).fetchone()
+        if t:
+            try:
+                r = json.loads(t["result_json"] or "{}")
+            except Exception:
+                r = {}
+            c = r.get("control") or {}
+            h["last_test"] = {"kind": t["kind"], "verdict": t["verdict"], "reasons": t["reasons"], "at": t["created_at"], "n": r.get("n"), "mean": r.get("mean"), "hit": r.get("hit"),
+                              "worst": r.get("worst"), "control_mean": c.get("mean"), "control_hit": c.get("hit"), "error": r.get("error")}
+        h["shadow_n"] = lab.conn.execute("SELECT COUNT(*) FROM shadow_signals WHERE hypothesis_id=?", (h["id"],)).fetchone()[0]
+    counts = {s: 0 for s in STATUSES}
+    for h in rows:
+        counts[h["status"]] = counts.get(h["status"], 0) + 1
+    return {"hypotheses": rows, "counts": counts, "gates": SETTINGS.lab.model_dump()}
+
+
+@app.post("/api/lab")
+async def api_lab_action(request: Request):
+    from .lab import Lab
+    if request.headers.get("x-requested-with") != "munchkin":
+        raise HTTPException(403, "bad request origin")
+    body = await request.json()
+    lab = Lab(ctx().journal)
+    action, hid = body.get("action"), int(body.get("id") or 0)
+    if action == "propose":
+        r = lab.propose(str(body.get("title") or body.get("statement", ""))[:140], str(body.get("statement", "")), origin="operator", origin_ref="dashboard")
+        if r.get("error"):
+            raise HTTPException(400, r["error"])
+        ctx().journal.add_event("lab", f"hypothesis #{r['id']} proposed by the operator: {str(body.get('title') or '')[:100]}")
+        return {"ok": True, "id": r["id"]}
+    ok = {"reject": lambda: lab.set_status(hid, "rejected", "operator (dashboard)"), "reopen": lambda: lab.set_status(hid, "proposed", "operator (dashboard)"),
+          "note": lambda: lab.note(hid, str(body.get("text", "")))}.get(action, lambda: False)()
+    if not ok:
+        raise HTTPException(400, f"cannot {action} #{hid}")
+    ctx().journal.add_event("lab", f"hypothesis #{hid}: {action} (dashboard)")
+    return {"ok": True}
+
+
 @app.get("/api/skills")
 def api_skills():
     from .skills import SkillStore

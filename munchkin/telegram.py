@@ -162,6 +162,7 @@ HELP = """MarketMunchkin commands
 /disarm SYMBOL
 /mute 60 (minutes)  /unmute
 /notify - show alert toggles;  /notify fills off
+/hypo <claim> - propose a hypothesis for the Lab;  /lab - the ledger
 Anything else you type is sent to the agent as an operator request; the answer comes back here when the next session runs (a minute or so during market hours)."""
 
 
@@ -289,6 +290,18 @@ class Bot:
             book.disarm(u)
             self.j.add_event("action", f"{u} disarmed from telegram")
             return f"{u} disarmed."
+        if cmd == "/hypo":
+            from .lab import Lab
+            if len(arg) < 40:
+                return "Say what happens, when, to what, over what horizon (at least 40 characters)."
+            r = Lab(self.j).propose(arg[:80], arg, origin="operator", origin_ref=f"telegram {chat_id}")
+            if r.get("error"):
+                return "Not recorded: " + r["error"]
+            self.j.add_event("lab", f"hypothesis #{r['id']} proposed from telegram: {arg[:100]}")
+            return f"Hypothesis #{r['id']} recorded. The agent will write the spec and test it in a lab session tonight; results land on the Brain page and in /lab."
+        if cmd == "/lab":
+            from .lab import Lab
+            return Lab(self.j).index_text(15)
         if cmd == "/mute":
             try:
                 mins = int(arg or "60")
