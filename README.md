@@ -96,9 +96,13 @@ The active style applies from the next session.
   and armed name against the tape and news, change something only if a thesis changed. A watcher polls every
   60 seconds and preempts with an **event session** when a resting stop fills, a target trades, a holding or the
   index moves, headlines land on a position, or an option nears expiry. Operator requests from Telegram jump the queue.
-- **Armed entries.** Instead of chasing, the agent arms instructions: "UBER call spread, $120, above 73.50, not
-  before 08:35, only if SPY is not down more than 1%". The watcher executes them within a minute of the trigger
-  and the option contracts are resolved at fire time.
+- **Armed entries.** For genuinely conditional entries the agent arms instructions: "UBER call spread, $120, above
+  73.50, not before 08:35, only if SPY is not down more than 1%". The watcher runs on its own thread, checks every
+  60 seconds regardless of what a session is doing, executes within a minute of the trigger, and resolves option
+  contracts at fire time. Triggers must sit within about one daily ATR of the price (the tool reports the distance
+  and rough odds of a touch); a setup that is valid at the current price is bought at the signal, not parked below
+  it. Every arm that expires or is disarmed leaves an ARM REVIEW note (touched or not, closest approach, drift) that
+  the post-market session reads first.
 - **Post-market (16:15 ET).** Grades the day's decisions against their theses, records lessons, revises the
   playbook if a rule should change, writes tomorrow's plan.
 - **Off hours.** Works its own task queue (research it assigned itself), reflects when the queue is empty, and
@@ -135,6 +139,9 @@ The active style applies from the next session.
   derived from New York time, quotes fall back to yfinance tagged as such, a circuit breaker fast-fails data calls
   for 90 s instead of every tool waiting 20 s, the dashboard serves its last good snapshot behind a banner, and the
   watcher never opens a position on a fallback quote. Resting stops live at the broker throughout.
+- **Watcher.** A separate thread with its own broker, market and journal connections: fills, resting stops,
+  targets, moves, headlines, expiry, armed entries, spread management. A fire that overshoots a cap by cents is
+  trimmed to fit rather than blocked.
 - **Exits.** Every entry carries a numeric stop and target. A protective stop rests at the broker (GTC for whole
   shares, DAY re-armed each morning for fractional shares and options). Targets are watched, not rested. Stops
   only ever trail up.
