@@ -102,10 +102,11 @@ class Market:
                 continue
             try:
                 fi = yf.Ticker(s.replace(".", "-")).fast_info
-                price, prev = fnum(fi.get("last_price")), fnum(fi.get("previous_close"))
+                g = lambda k: getattr(fi, k, None)  # noqa: E731  (FastInfo exposes values as attributes; .get() returns None)
+                price, prev = fnum(g("last_price")), fnum(g("previous_close"))
                 out[s] = {"symbol": s, "price": price, "price_time": now_et().strftime("%H:%M"), "price_src": "yfinance-fallback",
-                          "bid": None, "ask": None, "quote_time": None, "day_open": fnum(fi.get("open")), "day_high": fnum(fi.get("day_high")),
-                          "day_low": fnum(fi.get("day_low")), "day_vol": int(fi.get("last_volume") or 0) or None, "prev_close": prev,
+                          "bid": None, "ask": None, "quote_time": None, "day_open": fnum(g("open")), "day_high": fnum(g("day_high")),
+                          "day_low": fnum(g("day_low")), "day_vol": int(g("last_volume") or 0) or None, "prev_close": prev,
                           "chg_pct": None if not (price and prev) else round((price / prev - 1) * 100, 2)}
             except Exception as e:
                 out[s] = {"symbol": s, "error": f"no data ({str(e)[:60]})"}
