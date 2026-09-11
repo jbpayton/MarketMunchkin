@@ -556,6 +556,41 @@ async def api_telegram_action(request: Request):
     return {"ok": True}
 
 
+def _change_stamp() -> dict[str, Any]:
+    """Cheap fingerprint of 'something happened': newest event / session / decision / trace ids and the last equity sample."""
+    conn = ctx().journal.conn
+    row = conn.execute("SELECT (SELECT MAX(id) FROM events), (SELECT MAX(id) FROM sessions), (SELECT MAX(id) FROM decisions), "
+                       "(SELECT MAX(id) FROM trace), (SELECT MAX(ended_at) FROM sessions), (SELECT COUNT(*) FROM kv WHERE key LIKE 'entry:%')").fetchone()
+    return {"events": row[0], "sessions": row[1], "decisions": row[2], "trace": row[3], "ended": row[4], "arms": row[5],
+            "halted": HALT_FILE.exists()}
+
+
+@app.get("/api/stream")
+async def api_stream():
+    """Server-sent events: one message whenever the journal fingerprint changes (checked every 3 s), a heartbeat otherwise."""
+    import asyncio
+    from fastapi.responses import StreamingResponse
+
+    async def gen():
+        last = None
+        beat = 0
+        while True:
+            try:
+                cur = _change_stamp()
+            except Exception as e:
+                cur = {"error": str(e)[:80]}
+            if cur != last:
+                last = cur
+                yield f"event: change\ndata: {json.dumps(cur)}\n\n"
+            else:
+                beat += 1
+                if beat % 10 == 0:
+                    yield ": keepalive\n\n"
+            await asyncio.sleep(3)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/api/skills")
 def api_skills():
     from .skills import SkillStore

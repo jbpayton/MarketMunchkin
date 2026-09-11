@@ -66,3 +66,4 @@ svg text{font-family:var(--mono)}
 @media (max-width:900px){.tr{grid-template-columns:36px 14px minmax(0,1fr)}.tr .ts{font-size:10px}}
 .seg button{white-space:nowrap}
 .grid>.card{display:flex;flex-direction:column}
+.dot#live.on{box-shadow:0 0 0 4px color-mix(in srgb, var(--up) 35%, transparent);transition:box-shadow .2s}

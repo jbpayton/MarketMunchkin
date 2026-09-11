@@ -137,7 +137,7 @@ function renderNav(active) {
 function topbar(title, sub) {
   const styles = ['defensive', 'balanced', 'aggressive'];
   return `<div class="topbar"><div class="left"><span class="wordmark">Market<span>Munchkin</span></span><span class="vsep"></span><span class="title">${esc(title)}</span><span class="muted" style="font-size:12px">${sub}</span></div>
-  <div class="right"><span class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:6px"><span class="dot ${state.daemon === 'active' ? '' : 'off'}"></span><span id="next-session">daemon ${esc(state.daemon)}</span></span>
+  <div class="right"><span class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:6px"><span class="dot ${state.daemon === 'active' ? '' : 'off'}" id="live" title="live: re-renders when the journal changes"></span><span id="next-session">daemon ${esc(state.daemon)}</span></span>
   <span style="display:inline-flex;align-items:center;gap:8px"><span class="dim" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Style</span><span class="seg">${styles.map(s => `<button class="st-${s} ${s === state.style ? 'on' : ''}" onclick="setStyle('${s}')">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</span></span>
   <span class="seg">${[['dark', 'moon'], ['light', 'sun'], ['system', 'monitor']].map(([m, i]) => `<button class="${themeMode === m ? 'on' : ''}" title="${m}" onclick="themeMode='${m}';applyTheme('${m}');route()">${icon(i, 13)}</button>`).join('')}</span>
   <button class="halt" onclick="armKill()">${icon('shield', 14)}${state.halted ? 'Resume' : 'Halt'}</button></div></div><div id="killconfirm"></div>`;
@@ -263,4 +263,22 @@ async function route() {
   window.scrollTo(0, 0);
 }
 addEventListener('hashchange', route); route();
-setInterval(() => { if ((location.hash || '#/overview').startsWith('#/overview')) route(); }, 60000);
+/* live updates: the server streams a change fingerprint; the view re-renders in place (scroll kept, never while typing or confirming) */
+let liveTimer = null, lastStamp = null;
+function liveRefresh() {
+  if (document.hidden) return;
+  const active = document.activeElement; if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA')) return;
+  if ($('#killconfirm') && $('#killconfirm').innerHTML) return;
+  if ((location.hash || '#/overview').startsWith('#/config')) return;   // forms; refresh on demand there
+  const y = scrollY; const trace = document.querySelector('.tr .box.open');
+  route().then(() => { scrollTo(0, y); const el = $('#live'); if (el) { el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 900); } });
+}
+function connectLive() {
+  try {
+    const es = new EventSource('/api/stream');
+    es.addEventListener('change', ev => { if (lastStamp !== null && ev.data !== lastStamp) { clearTimeout(liveTimer); liveTimer = setTimeout(liveRefresh, 400); } lastStamp = ev.data; });
+    es.onerror = () => { es.close(); setTimeout(connectLive, 5000); };
+  } catch (e) { setInterval(() => liveRefresh(), 30000); }
+}
+connectLive();
+setInterval(() => { if ((location.hash || '#/overview').startsWith('#/overview')) liveRefresh(); }, 60000);   // clock, countdown, quotes

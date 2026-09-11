@@ -72,7 +72,8 @@ class Watcher:
         self.j.upsert_fills(fills)
         return events
 
-    def check_prices(self, positions: list[dict[str, Any]]) -> list[str]:
+    def check_prices(self, positions: list[dict[str, Any]], actions: list[str] | None = None) -> list[str]:
+        actions_ref: list[str] = actions if actions is not None else []
         events: list[str] = []
         if not positions:
             syms = ["SPY", "QQQ"]
@@ -93,12 +94,17 @@ class Watcher:
         for p in positions:
             sym = p["symbol"]
             lv = self.j.exits(sym) or {}
+            take = getattr(self.cfg, "target_mode", "take") == "take" and getattr(self, "_market_open", False)
             if is_option(sym):
                 cur = float(p["current_price"])
                 tgt, stp = lv.get("target_price"), lv.get("stop_price")
                 if tgt and cur >= float(tgt) and not self._recently(f"tgt:{sym}", self.cfg.target_renotify_min):
-                    events.append(f"TARGET: {occ_human(sym)} mark {cur} >= target premium {tgt}")
                     self._mark(f"tgt:{sym}")
+                    if take and not self._recently(f"took:{sym}", 30):
+                        self._mark(f"took:{sym}")
+                        self._take_option_target(sym, p, cur, float(tgt), actions_ref, events)
+                    else:
+                        events.append(f"TARGET: {occ_human(sym)} mark {cur} >= target premium {tgt}")
                 if stp and cur <= float(stp) and not self._recently(f"stp:{sym}", 10):
                     events.append(f"STOP LEVEL: {occ_human(sym)} mark {cur} <= stop premium {stp} (check the resting stop / act)")
                     self._mark(f"stp:{sym}")
@@ -106,8 +112,13 @@ class Watcher:
                 px = snaps.get(sym, {}).get("price")
                 tgt = lv.get("target_price")
                 if px and tgt and px >= float(tgt) and not self._recently(f"tgt:{sym}", self.cfg.target_renotify_min):
-                    events.append(f"TARGET: {sym} {px} >= target {tgt}")
                     self._mark(f"tgt:{sym}")
+                    real_quote = snaps.get(sym, {}).get("price_src") != "yfinance-fallback"
+                    if take and real_quote and not self._recently(f"took:{sym}", 30):
+                        self._mark(f"took:{sym}")
+                        self._take_stock_target(sym, p, float(px), float(tgt), actions_ref, events)
+                    else:
+                        events.append(f"TARGET: {sym} {px} >= target {tgt}")
         return events
 
     def check_news(self, positions: list[dict[str, Any]]) -> list[str]:
@@ -259,11 +270,65 @@ class Watcher:
                     events.append(f"STOP: spread {occ_human(rec['long'])} at stop ({v}) but close FAILED: {str(e)[:80]}; act now")
             elif v >= float(rec["target"]) and not self._recently(f"sptgt:{key}", self.cfg.target_renotify_min):
                 self._mark(f"sptgt:{key}")
-                events.append(f"TARGET: spread {occ_human(rec['long'])}/{occ_human(rec['short'])} value {v} >= target {rec['target']} (entry {rec['entry']}); take profit or trail")
+                if getattr(self.cfg, "target_mode", "take") == "take":
+                    try:
+                        msg = close_spread_now(self.b, self.j, rec, f"target hit: value {v} >= {rec['target']}", v)
+                        sb.clear(key)
+                        actions.append("TARGET TAKEN: " + msg)
+                        events.append("TARGET TAKEN: " + msg)
+                    except Exception as e:
+                        events.append(f"TARGET: spread {occ_human(rec['long'])} at target ({v}) but close FAILED: {str(e)[:80]}; act now")
+                else:
+                    events.append(f"TARGET: spread {occ_human(rec['long'])}/{occ_human(rec['short'])} value {v} >= target {rec['target']} (entry {rec['entry']}); take profit or trail")
         return events, actions
 
     # ------------------------------------------------------------------ tick
+    # ------------------------------------------------------------------ targets (mechanical)
+    def _take_stock_target(self, sym: str, p: dict[str, Any], px: float, tgt: float, actions: list[str], events: list[str]) -> None:
+        held = float(p.get("qty_available") or p["qty"])
+        pct = max(1, min(100, int(self.cfg.target_take_pct)))
+        q = held if pct >= 100 else round(held * pct / 100, 6)
+        try:
+            self.x.cancel_exit_orders(sym)
+            o = self.b.submit_stock_order(sym, "sell", qty=q, order_type="market")
+            fill = o.get("filled_avg_price") or px
+            self.j.add_decision(None, "close", sym, side="sell", qty=q, price=fill, order_id=o.get("id"), status=o.get("status", "submitted"),
+                                meta={"reason": f"target {tgt} reached ({px}); mechanical take {pct}%", "mechanical": True, "partial": q < held - 1e-9}, underlying=sym)
+            remaining = 0.0 if q >= held - 1e-9 else round(held - q, 6)
+            if remaining > 0:
+                lv = self.j.exits(sym) or {}
+                new_stop = max(float(lv.get("stop_price") or 0), float(p.get("avg_entry_price") or 0))
+                self.x.update(sym, stop_price=new_stop)
+                self.x.place_stop(sym, remaining, new_stop)
+                msg = f"TARGET TAKEN: {sym} sold {q:g} of {held:g} at ~{fill} (target {tgt}); {remaining:g} left with the stop at {new_stop}"
+            else:
+                self.j.set("exits:" + sym, None)
+                msg = f"TARGET TAKEN: {sym} sold {q:g} at ~{fill} (target {tgt})"
+            actions.append(msg)
+            events.append(msg + " — review the thesis; re-enter only through the gate")
+        except Exception as e:
+            events.append(f"TARGET: {sym} {px} >= target {tgt} but the mechanical sell FAILED: {str(e)[:100]}; act now")
+
+    def _take_option_target(self, sym: str, p: dict[str, Any], cur: float, tgt: float, actions: list[str], events: list[str]) -> None:
+        q = int(float(p.get("qty_available") or p["qty"]))
+        try:
+            snap = next((r for r in self.m.option_snapshots([sym]) if r.get("symbol") == sym), {})
+            bid = snap.get("bid")
+            if not bid:
+                raise RuntimeError("no bid")
+            self.x.cancel_exit_orders(sym)
+            o = self.b.submit_option_order(sym, "sell", q, float(bid), "sell_to_close")
+            self.j.add_decision(None, "close", sym, side="sell", qty=q, price=float(bid), order_id=o.get("id"), status=o.get("status", "submitted"),
+                                meta={"reason": f"target premium {tgt} reached (mark {cur}); mechanical sell at bid", "mechanical": True}, underlying=parse_occ(sym)["underlying"])
+            self.j.set("exits:" + sym, None)
+            msg = f"TARGET TAKEN: {occ_human(sym)} {q}x sell-to-close at {bid} (mark {cur} >= target {tgt})"
+            actions.append(msg)
+            events.append(msg + " — confirm the fill; a DAY limit at the bid can miss on a fast tape")
+        except Exception as e:
+            events.append(f"TARGET: {occ_human(sym)} mark {cur} >= target premium {tgt} but the mechanical sell FAILED: {str(e)[:100]}; act now")
+
     def tick(self, market_open: bool) -> tuple[list[str], list[str]]:
+        self._market_open = market_open
         """Returns (events that should wake the agent, housekeeping actions taken)."""
         events: list[str] = []
         actions: list[str] = []
@@ -302,7 +367,7 @@ class Watcher:
             log.warning("watch spreads: %s", e)
         if market_open:
             try:
-                events += self.check_prices(positions)
+                events += self.check_prices(positions, actions)
             except Exception as e:
                 log.warning("watch prices: %s", e)
             try:

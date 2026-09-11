@@ -499,3 +499,35 @@ def test_clamp_to_cap_and_arm_outcome():
     rec["trigger_price"] = 195.0
     o2 = arm_outcome(M(), rec)
     assert o2["touched"] is False and o2["closest_pct"] > 0 and "never reached" in arm_outcome_text(o2)
+
+
+def test_watcher_takes_stock_target_mechanically():
+    from munchkin.config import WatchSettings
+    from munchkin.watch import Watcher
+
+    class J:
+        def __init__(self): self.kv, self.decisions, self.marks = {"exits:UBER": {"stop_price": 70.5, "target_price": 79.0}}, [], {}
+        def exits(self, sym): return self.kv.get("exits:" + sym)
+        def set(self, k, v): self.kv[k] = v
+        def get(self, k, d=None): return self.kv.get(k, d)
+        def add_decision(self, *a, **k): self.decisions.append((a, k))
+        def set_exits(self, *a, **k): pass
+    class B:
+        def __init__(self): self.orders = []
+        def submit_stock_order(self, sym, side, qty=None, notional=None, order_type="market", limit_price=None):
+            self.orders.append((sym, side, qty, order_type)); return {"id": "o1", "status": "filled", "filled_avg_price": 79.2}
+    class X:
+        def __init__(self): self.cancelled = []
+        def cancel_exit_orders(self, sym, *a, **k): self.cancelled.append(sym)
+        def update(self, *a, **k): return True, ""
+        def place_stop(self, *a, **k): return {}
+    class M:
+        pass
+    j, b, x = J(), B(), X()
+    w = Watcher.__new__(Watcher); w.b, w.m, w.j, w.x = b, M(), j, x; w.cfg = WatchSettings(target_mode="take", target_take_pct=100); w._market_open = True
+    w._recently = lambda key, minutes: False; w._mark = lambda key: j.marks.__setitem__(key, 1)
+    actions, events = [], []
+    w._take_stock_target("UBER", {"symbol": "UBER", "qty": "1.377", "qty_available": "1.377", "avg_entry_price": "72.61"}, 79.2, 79.0, actions, events)
+    assert b.orders == [("UBER", "sell", 1.377, "market")] and x.cancelled == ["UBER"] and j.kv["exits:UBER"] is None
+    assert actions and actions[0].startswith("TARGET TAKEN: UBER sold 1.377") and events and "review the thesis" in events[0]
+    assert j.decisions[0][0][1] == "close" and j.decisions[0][1]["meta"]["mechanical"] is True

@@ -45,7 +45,7 @@ supports tool calling (LM Studio, Ollama, vLLM, OpenRouter, OpenAI, Anthropic).
     </td>
     <td width="50%">
       <img src="docs/screenshots/light.png" alt="Light theme">
-      <p><b>Light, dark, or system.</b> Palettes validated for both themes. The style switch is colour-coded: <b>Defensive blue, Balanced green, Aggressive red</b>. The kill switch needs a second click.</p>
+      <p><b>Live, then light, dark, or system.</b> The page re-renders in place whenever the journal changes (server-sent events); no reload needed. Palettes validated for both themes. The style switch is colour-coded: <b>Defensive blue, Balanced green, Aggressive red</b>. The kill switch needs a second click.</p>
     </td>
   </tr>
 </table>
@@ -143,8 +143,10 @@ The active style applies from the next session.
   targets, moves, headlines, expiry, armed entries, spread management. A fire that overshoots a cap by cents is
   trimmed to fit rather than blocked.
 - **Exits.** Every entry carries a numeric stop and target. A protective stop rests at the broker (GTC for whole
-  shares, DAY re-armed each morning for fractional shares and options). Targets are watched, not rested. Stops
-  only ever trail up.
+  shares, DAY re-armed each morning for fractional shares and options). Targets are taken by the watcher itself
+  (`[watch] target_mode = "take"`, `target_take_pct`): stock at market, single options at the bid, verticals as one
+  order, then the agent is woken to review; set `target_mode = "wake"` to let the agent decide instead. Stops only
+  ever trail up.
 - **Context window.** The client asks the serving stack for the context size (LM Studio, Ollama, OpenRouter,
   vLLM) and derives the transcript budget from it, so a smaller model is compacted harder instead of failing.
   Below 32k tokens the Config tab warns you. `LLM_CONTEXT_TOKENS` overrides.

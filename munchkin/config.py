@@ -143,6 +143,8 @@ class WatchSettings(BaseModel):
     index_move_pct: float = 0.8            # wake on SPY/QQQ moving this much since the last session
     news_wake: bool = True                 # wake on new headlines for held names
     target_renotify_min: int = 30
+    target_mode: str = "take"              # take: the watcher sells at the target itself, then wakes the agent; wake: the agent decides
+    target_take_pct: int = 100             # share of the position the watcher sells at the target (the rest keeps a stop at breakeven or better)
     auto_stops: bool = True                # keep a resting stop order on every position
     expiry_guard: bool = True              # force-close options on expiration day and file do-not-exercise as backstop
     expiry_wake_dte: int = 1               # wake the agent when an option has <= this many days left
