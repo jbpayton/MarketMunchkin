@@ -2,6 +2,8 @@
 
 Status: proposal, 2026-09-11. Nothing in this document is built yet.
 
+Decided 2026-09-11: promotion and demotion are human decisions, never automatic. The agent recommends; the operator decides.
+
 ## Why
 
 The agent already produces claims about the market all day (lessons, notes, the playbook, study notes) and the
@@ -61,12 +63,14 @@ proposed -> specified -> testing -> tested(pass|fail|inconclusive) -> shadowing 
 - **tested(pass) → shadowing**: the detector is registered; the watcher tracks virtual fills at the next tick's price and
   virtual exits by holding period, stop or target. Requires ≥ `shadow_min_signals` (10) or `shadow_min_weeks` (4).
   Shadow expectancy must be > 0 and not worse than half the backtested effect.
-- **shadowing → live**: operator approval only (dashboard or Telegram `/promote ID`). A budget (`budget_pct` of
+- **shadowing → live**: operator approval only (dashboard or Telegram `/promote ID`). The system never promotes on its own,
+  whatever the numbers say. A budget (`budget_pct` of
   equity, `max_concurrent`) and kill rules are set; a skill draft is generated from the spec and the test notes for the
   operator to approve; the detector switches from virtual to real: it arms entries (sized by the strategy, inside the
   style envelope) or wakes the agent with the strategy context, per the strategy's `mode`.
-- **live → paused**: automatic on kill rules (`max_drawdown_pct`, `max_consecutive_losses`, `min_expectancy_after_n`);
-  **→ retired**: operator, or paused twice. Retired records keep everything.
+- **live → paused / retired**: the operator, any time, from the dashboard or Telegram (`/pause ID`, `/retire ID`). Kill
+  rules do not act on their own; when one trips, the strategy stops taking *new* signals (existing positions keep their
+  stops and targets) and a demotion recommendation goes to the operator with the numbers. Retired records keep everything.
 - **rejected**: the propose tool refuses near-duplicates of rejected or failed claims (statement similarity + same trigger keys)
   and shows the prior result instead.
 
@@ -99,6 +103,14 @@ All tests run in the existing sandbox (no network, no credentials) on datasets t
 `propose_hypothesis(title, statement, origin_ref)`, `specify_hypothesis(id, spec)`, `list_hypotheses(status)`,
 `get_hypothesis(id)`, `run_hypothesis_test(id, kind, params)`, `note_hypothesis(id, text)`. Promotion, budgets and
 retirement are operator-only. Entry tools accept `strategy_id`.
+
+## The decision inbox
+
+Everything that needs a human lands in one place, on the Lab tab and as a Telegram message: promotion candidates
+(a hypothesis that passed its tests and its shadow run, with the results attached), demotion recommendations (a kill
+rule tripped, or the agent's post-market review argues a strategy has stopped working), and budget changes the agent
+proposes. Each item has approve / decline / defer, and a declined item records why so it is not re-raised for 30 days.
+The agent may recommend; only the operator promotes, demotes, or changes a budget.
 
 ## Operator surfaces
 
@@ -139,6 +151,6 @@ status and budget so the model knows it is live.
 ## Open questions
 
 - Gate thresholds above are defaults; tighten or loosen per your appetite.
-- Should promotion ever be automatic (say, after a shadow track of 20+ signals with positive expectancy)? Default: no.
+- ~~Should promotion ever be automatic?~~ Decided: no. Human-gated both ways, with an inbox of recommendations.
 - Option-expression hypotheses: shadow-only as proposed, or also require an underlying-stock backtest?
 - Strategy budgets: fixed per strategy, or a shared "strategies" pool split by recent expectancy?
