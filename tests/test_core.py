@@ -609,3 +609,39 @@ def test_lab_templates_run_with_controls(tmp_path):
     r2 = rec2["result"]
     assert r2.get("kind") == "screen_backtest" and ("n" in r2) and (r2.get("n", 0) == 0 or r2["control"]["n"] > 0)
     assert len(lab.get(hid2)["tests"]) == 1
+
+
+def test_search_free_first_cache_and_pacing(tmp_path, monkeypatch):
+    from munchkin import providers as P, search as S
+    rss = """<?xml version="1.0"?><rss version="2.0"><channel><item><title>Uber wins Spain permit - Reuters</title><link>https://r.example/1</link>
+    <pubDate>Thu, 11 Sep 2026 14:00:00 GMT</pubDate><description>&lt;a href="x"&gt;Uber wins&lt;/a&gt; the first national permit</description><source url="https://reuters.com">Reuters</source></item>
+    <item><title>Second</title><link>https://r.example/2</link><pubDate>bad</pubDate><description></description></item></channel></rss>"""
+    class R:
+        status_code = 200; text = rss
+    counts = {}
+    monkeypatch.setattr(P.httpx, "get", lambda *a, **k: R())
+    monkeypatch.setattr(P, "_count", lambda p: counts.__setitem__(p, counts.get(p, 0) + 1))
+    rows = P.googlenews_search("UBER stock", 5, "week")
+    assert rows[0]["title"].startswith("Uber wins") and rows[0]["date"] == "2026-09-11T14:00" and rows[0]["engine"] == "google-news/Reuters" and rows[1]["date"] is None
+    # chain: google news answers a news query, tavily is never called; the second call is a cache hit
+    monkeypatch.setattr(S, "CACHE_FILE", tmp_path / "cache.json")
+    monkeypatch.setattr(P, "load_config", lambda: {"order": ["googlenews", "searxng", "brave", "tavily"], "enabled": {"googlenews": True, "searxng": False, "tavily": True, "brave": False}, "budgets": {"tavily": 900}, "merge_news": True})
+    monkeypatch.setattr(P, "enabled", lambda p: p == "googlenews" or p == "tavily")
+    monkeypatch.setattr(P, "usage", lambda p: 0)
+    monkeypatch.setattr(P, "usage_today", lambda p: 0)
+    tav = []
+    monkeypatch.setattr(P, "tavily_search", lambda *a, **k: tav.append(1) or [])
+    out1 = S.web_search("UBER stock", "news", 5, "week")
+    calls_after_first = counts.get("googlenews", 0)
+    out2 = S.web_search("uber stock", "news", 5, "week")
+    assert out1 and out2 == out1 and counts.get("googlenews") == calls_after_first and tav == []
+    # pacing: a monthly budget is spread over the remaining days
+    monkeypatch.setattr(P, "usage", lambda p: 900)
+    monkeypatch.setattr(P, "usage_today", lambda p: 0)
+    assert P.within_budget("tavily") is False
+    monkeypatch.setattr(P, "usage", lambda p: 400)
+    allowance = P.daily_allowance("tavily"); assert allowance is not None and 3 <= allowance < 900
+    monkeypatch.setattr(P, "usage_today", lambda p: allowance)
+    assert P.within_budget("tavily") is False
+    monkeypatch.setattr(P, "usage_today", lambda p: 0)
+    assert P.within_budget("tavily") is True

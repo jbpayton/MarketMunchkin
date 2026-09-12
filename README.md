@@ -150,9 +150,11 @@ The active style applies from the next session.
 - **Context window.** The client asks the serving stack for the context size (LM Studio, Ollama, OpenRouter,
   vLLM) and derives the transcript budget from it, so a smaller model is compacted harder instead of failing.
   Below 32k tokens the Config tab warns you. `LLM_CONTEXT_TOKENS` overrides.
-- **Providers.** SearXNG for search, optional Tavily (search and a fetch fallback for sites that block bots),
-  Finnhub (news, earnings calendar) and StockTwits (social buzz), all on free tiers with monthly budgets,
-  managed from the Config tab. Keys go to `.env`, never to the model.
+- **Providers, free first.** News queries go to Google News RSS and SearXNG (no keys, no quotas), then Brave
+  (2,000 queries a month free, if you add a key), then Tavily (1,000 credits a month, paced per day so a busy
+  week cannot drain the month). Identical queries are served from a shared cache for 20 to 60 minutes, and a
+  symbol's research dossier is reused within the research window. Finnhub (news, earnings calendar) and
+  StockTwits (social buzz) are free too. All managed from the Config tab; keys go to `.env`, never to the model.
 
 ## The Lab (phase one)
 

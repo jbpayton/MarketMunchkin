@@ -23,8 +23,8 @@ SEARCH_CONFIG_FILE = DATA_DIR / "search.json"
 ENV_FILE = ROOT / ".env"
 KEY_NAMES = {"tavily": "TAVILY_API_KEY", "finnhub": "FINNHUB_API_KEY", "brave": "BRAVE_API_KEY", "telegram": "TELEGRAM_BOT_TOKEN"}
 DEFAULT_CONFIG = {
-    "order": ["tavily", "searxng"],                      # web/news search chain, first that returns results wins (merged with the next on news)
-    "enabled": {"tavily": True, "searxng": True, "finnhub": True, "brave": False},
+    "order": ["googlenews", "searxng", "brave", "tavily"],   # free first; Tavily is the paid-credit last resort
+    "enabled": {"tavily": True, "searxng": True, "finnhub": True, "brave": False, "googlenews": True},
     "budgets": {"tavily": 900, "brave": 1800, "finnhub": 50000},   # calls per calendar month
     "merge_news": True,                                   # for news queries, merge the first two providers' results
 }
@@ -32,6 +32,9 @@ _cfg_cache: tuple[float, dict] | None = None
 
 
 # ------------------------------------------------------------------ config / keys / usage
+_OLD_DEFAULT_ORDER = ["tavily", "searxng"]
+
+
 def load_config() -> dict[str, Any]:
     global _cfg_cache
     if _cfg_cache and time.time() - _cfg_cache[0] < 20:
@@ -47,6 +50,9 @@ def load_config() -> dict[str, Any]:
                     cfg[k] = v
         except Exception as e:
             log.warning("search.json unreadable: %s", e)
+    if cfg.get("order") == _OLD_DEFAULT_ORDER:          # one-time migration to the free-first chain
+        cfg["order"] = list(DEFAULT_CONFIG["order"])
+        cfg["enabled"].setdefault("googlenews", True)
     _cfg_cache = (time.time(), cfg)
     return cfg
 
@@ -86,15 +92,22 @@ def masked_key(provider: str) -> str | None:
     return ("*" * max(0, len(k) - 4)) + k[-4:]
 
 
+KEYLESS = {"searxng", "googlenews"}
+
+
 def enabled(provider: str) -> bool:
     cfg = load_config()
-    if provider == "searxng":
-        return bool(cfg["enabled"].get("searxng", True))
+    if provider in KEYLESS:
+        return bool(cfg["enabled"].get(provider, True))
     return bool(cfg["enabled"].get(provider, False)) and bool(get_key(provider))
 
 
 def _usage_key(provider: str) -> str:
     return f"usage:{provider}:{dt.date.today().strftime('%Y-%m')}"
+
+
+def _day_key(provider: str) -> str:
+    return f"usage:{provider}:{dt.date.today().isoformat()}"
 
 
 def usage(provider: str) -> int:
@@ -105,30 +118,110 @@ def usage(provider: str) -> int:
         return 0
 
 
+def usage_today(provider: str) -> int:
+    try:
+        from .journal import Journal
+        return int(Journal().get(_day_key(provider), 0) or 0)
+    except Exception:
+        return 0
+
+
 def _count(provider: str) -> None:
     try:
         from .journal import Journal
         j = Journal()
         j.set(_usage_key(provider), int(j.get(_usage_key(provider), 0) or 0) + 1)
+        j.set(_day_key(provider), int(j.get(_day_key(provider), 0) or 0) + 1)
     except Exception:
         pass
 
 
+def daily_allowance(provider: str) -> int | None:
+    """Pace a monthly budget: the month's remaining credits spread over the remaining days, times 1.5 for bursts."""
+    b = load_config()["budgets"].get(provider)
+    if b is None:
+        return None
+    today = dt.date.today()
+    days_left = max(1, (dt.date(today.year + (today.month == 12), (today.month % 12) + 1, 1) - today).days)
+    remaining = max(0, int(b) - usage(provider))
+    return max(3, int(remaining / days_left * 1.5))
+
+
 def within_budget(provider: str) -> bool:
     b = load_config()["budgets"].get(provider)
-    return b is None or usage(provider) < int(b)
+    if b is None:
+        return True
+    if usage(provider) >= int(b):
+        return False
+    allowance = daily_allowance(provider)
+    return allowance is None or usage_today(provider) < allowance
 
 
 def status() -> dict[str, Any]:
     cfg = load_config()
     out = {}
-    for p in ("tavily", "finnhub", "brave", "searxng"):
-        out[p] = {"enabled_flag": bool(cfg["enabled"].get(p, p == "searxng")), "has_key": bool(get_key(p)) if p != "searxng" else True,
-                  "key_masked": masked_key(p) if p != "searxng" else None, "active": enabled(p) if p != "searxng" else bool(cfg["enabled"].get("searxng", True)),
-                  "usage_month": usage(p), "budget": cfg["budgets"].get(p), "url": SETTINGS.searxng_url if p == "searxng" else None}
+    for p in ("googlenews", "searxng", "brave", "tavily", "finnhub"):
+        keyless = p in KEYLESS
+        out[p] = {"enabled_flag": bool(cfg["enabled"].get(p, keyless)), "has_key": True if keyless else bool(get_key(p)),
+                  "key_masked": None if keyless else masked_key(p), "active": enabled(p),
+                  "usage_month": usage(p), "usage_today": usage_today(p), "daily_allowance": daily_allowance(p), "budget": cfg["budgets"].get(p),
+                  "url": SETTINGS.searxng_url if p == "searxng" else None}
     out["order"] = cfg["order"]
     out["merge_news"] = cfg.get("merge_news", True)
     return out
+
+
+# ------------------------------------------------------------------ Google News (RSS, no key, no quota to speak of)
+def googlenews_search(query: str, max_results: int = 8, time_range: str | None = None) -> list[dict]:
+    import xml.etree.ElementTree as ET
+    from html import unescape
+    q = query.strip()
+    when = {"day": "1d", "week": "7d", "month": "30d", "year": "1y"}.get(time_range or "")
+    if when:
+        q += f" when:{when}"
+    r = httpx.get("https://news.google.com/rss/search", params={"q": q, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+                  headers={"User-Agent": "Mozilla/5.0 (MarketMunchkin research bot)"}, timeout=15, follow_redirects=True)
+    _count("googlenews")
+    if r.status_code != 200:
+        raise RuntimeError(f"google news HTTP {r.status_code}")
+    out = []
+    for item in ET.fromstring(r.text).iter("item"):
+        title = unescape((item.findtext("title") or "").strip())
+        src = item.find("source")
+        source = (src.text or "").strip() if src is not None else ""
+        desc = re.sub(r"<[^>]+>", " ", unescape(item.findtext("description") or ""))
+        desc = re.sub(r"\s+", " ", desc).strip()
+        pub = item.findtext("pubDate") or ""
+        try:
+            date = dt.datetime.strptime(pub[:25], "%a, %d %b %Y %H:%M:%S").strftime("%Y-%m-%dT%H:%M")
+        except Exception:
+            date = None
+        out.append({"title": title[:160], "url": (item.findtext("link") or "").strip(), "snippet": (desc or title)[:400],
+                    "date": date, "engine": f"google-news/{source}" if source else "google-news"})
+        if len(out) >= max_results:
+            break
+    return out
+
+
+# ------------------------------------------------------------------ Brave Search (free tier: 2,000 queries / month)
+def brave_search(query: str, category: str = "general", max_results: int = 8, time_range: str | None = None) -> list[dict]:
+    key = get_key("brave")
+    if not key:
+        raise RuntimeError("brave key not set")
+    fresh = {"day": "pd", "week": "pw", "month": "pm", "year": "py"}.get(time_range or "")
+    path = "news/search" if category == "news" else "web/search"
+    params = {"q": query, "count": min(20, max_results)}
+    if fresh:
+        params["freshness"] = fresh
+    r = httpx.get(f"https://api.search.brave.com/res/v1/{path}", params=params,
+                  headers={"X-Subscription-Token": key, "Accept": "application/json"}, timeout=20)
+    _count("brave")
+    if r.status_code != 200:
+        raise RuntimeError(f"brave HTTP {r.status_code}: {r.text[:120]}")
+    d = r.json()
+    rows = d.get("results", []) if category == "news" else (d.get("web") or {}).get("results", [])
+    return [{"title": (x.get("title") or "")[:160], "url": x.get("url", ""), "snippet": re.sub(r"<[^>]+>", "", x.get("description") or "")[:400],
+             "date": (x.get("page_age") or x.get("age") or "")[:16] or None, "engine": "brave"} for x in rows[:max_results]]
 
 
 # ------------------------------------------------------------------ Tavily
@@ -246,7 +339,11 @@ def finnhub_metrics(symbol: str) -> dict[str, Any]:
 def test_provider(provider: str) -> dict[str, Any]:
     t = time.time()
     try:
-        if provider == "tavily":
+        if provider == "googlenews":
+            res = googlenews_search("stock market today", 3, "day")
+        elif provider == "brave":
+            res = brave_search("stock market today", "news", 3, "day")
+        elif provider == "tavily":
             res = tavily_search("stock market today", "news", 3, "day")
             return {"ok": True, "detail": f"{len(res)} results in {time.time()-t:.1f}s; first: {res[0]['title'][:60] if res else '-'}"}
         if provider == "finnhub":

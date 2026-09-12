@@ -488,7 +488,7 @@ class ToolRegistry:
             return f"{symbol.upper()}: " + ", ".join(f"{k}={v}" for k, v in f.items())
 
         self.add("get_fundamentals", "Company snapshot: sector, market cap, P/E, short % float, growth, analyst target, NEXT EARNINGS DATE, ex-dividend date.",
-                 _schema({"symbol": _p("symbol", "string", "ticker")}, ["symbol"]), get_fundamentals)
+                 _schema({"symbol": _p("symbol", "string", "ticker"), "refresh": _p("refresh", "boolean", "ignore the cached dossier from the last few hours")}, ["symbol"]), get_fundamentals)
 
         def get_earnings_dates(symbols: list[str]) -> str:
             rows = []
@@ -552,9 +552,17 @@ class ToolRegistry:
                  _schema({"symbol": _p("symbol", "string", "ticker")}, ["symbol"]), get_social_buzz)
 
         # ---------------- research dossier
-        def research_symbol(symbol: str) -> str:
+        def research_symbol(symbol: str, refresh: bool = False) -> str:
             u = symbol.upper().strip()
             c.research.note_dossier(u)
+            cached = c.journal.get(f"dossier:{u}")
+            if cached and not refresh:
+                try:
+                    age_h = (now_et() - dt.datetime.fromisoformat(cached["ts"])).total_seconds() / 3600
+                except Exception:
+                    age_h = 99
+                if age_h < c.settings.risk.research_window_hours:
+                    return f"(dossier from {cached['ts'][11:16]} ET, {age_h:.1f}h old; pass refresh=true for a fresh one)\n" + cached["text"]
             out: list[str] = [f"# DOSSIER {u} ({now_et().strftime('%Y-%m-%d %H:%M')} ET)"]
             snap = c.market.snapshots([u]).get(u, {})
             out.append(f"quote: {snap.get('price')} @{snap.get('price_time')} ({snap.get('price_src')}), bid/ask {snap.get('bid')}/{snap.get('ask')}, today {snap.get('chg_pct')}%, prev close {snap.get('prev_close')}")
@@ -637,6 +645,14 @@ class ToolRegistry:
                 out.append("lessons mentioning it: " + " | ".join(t[:160] for t in th[:3]))
             out.append("Cite: quote/bars = Alpaca; fundamentals = Yahoo Finance; headlines = Benzinga/web with dates above.")
             return "\n".join(out)
+
+        _research_symbol_impl = research_symbol
+
+        def research_symbol(symbol: str, refresh: bool = False) -> str:  # noqa: F811
+            text = _research_symbol_impl(symbol, refresh)
+            if not text.startswith("(dossier from"):
+                c.journal.set(f"dossier:{symbol.upper().strip()}", {"ts": now_et().isoformat(timespec="seconds"), "text": text})
+            return text
 
         self.add("research_symbol", "Full DOSSIER for one name in a single call: live quote, daily context and ranks, last bars, intraday stats (market hours), fundamentals and earnings date, 72h news feed + web news with the top 2 articles actually fetched and excerpted, options read (IV vs realized, expected move, skew, OI walls), your journal history and lessons for the name. Required before any entry; use it to go deep on every shortlisted candidate.",
                  _schema({"symbol": _p("symbol", "string", "ticker")}, ["symbol"]), research_symbol)

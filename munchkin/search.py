@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
+import time
+import json
 import re
 
 import httpx
 import trafilatura
 
-from .config import SETTINGS
+from .config import DATA_DIR, SETTINGS
 from . import providers as P
 
 log = logging.getLogger("munchkin.search")
@@ -64,25 +66,64 @@ def _searxng_search(query: str, category: str, max_results: int, time_range: str
     return out
 
 
+CACHE_FILE = DATA_DIR / "search_cache.json"
+CACHE_TTL_S = {"news": 20 * 60, "general": 60 * 60}
+
+
+def _cache_load() -> dict:
+    try:
+        return json.loads(CACHE_FILE.read_text()) if CACHE_FILE.exists() else {}
+    except Exception:
+        return {}
+
+
+def _cache_save(d: dict) -> None:
+    try:
+        cutoff = time.time() - 24 * 3600
+        d = {k: v for k, v in d.items() if v.get("t", 0) > cutoff}
+        tmp = CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d))
+        tmp.replace(CACHE_FILE)
+    except Exception as e:
+        log.debug("search cache save failed: %s", e)
+
+
 def web_search(query: str, category: str = "general", max_results: int = 8,
-               time_range: str | None = None) -> list[dict]:
-    """Provider chain (data/search.json): first enabled provider with results wins; news queries merge the
-    first two so paid and free sources complement each other. Budgets are enforced per calendar month."""
+               time_range: str | None = None, use_cache: bool = True) -> list[dict]:
+    """Provider chain (data/search.json), free providers first: Google News RSS and SearXNG (no keys), Brave (2,000/month
+    free), Tavily last (1,000 credits/month, paced per day). News queries merge the first two providers with results.
+    Identical queries are served from a shared cache (20 min news, 60 min general) so a hundred sessions a day do not
+    burn a hundred credits on "stock market today"."""
     from . import providers as P
+    key = json.dumps([query.strip().lower(), category, int(max_results), time_range or ""])
+    cache = _cache_load()
+    hit = cache.get(key)
+    if use_cache and hit and time.time() - hit.get("t", 0) < CACHE_TTL_S.get(category, 1800):
+        return hit["rows"]
     cfg = P.load_config()
     collected: list[dict] = []
     served: list[str] = []
-    for name in cfg.get("order", ["tavily", "searxng"]):
-        if name == "searxng":
-            if not cfg["enabled"].get("searxng", True):
+    for name in cfg.get("order", ["googlenews", "searxng", "brave", "tavily"]):
+        if name == "googlenews":
+            if category != "news" or not P.enabled("googlenews"):
+                continue
+            fn = lambda: P.googlenews_search(query, max_results, time_range)
+        elif name == "searxng":
+            if not P.enabled("searxng"):
                 continue
             fn = lambda: _searxng_search(query, category, max_results, time_range)
+        elif name == "brave":
+            if not P.enabled("brave") or not P.within_budget("brave"):
+                continue
+            fn = lambda: P.brave_search(query, category, max_results, time_range)
         elif name == "tavily":
             if not P.enabled("tavily") or not P.within_budget("tavily"):
                 continue
             fn = lambda: P.tavily_search(query, category, max_results, time_range)
         else:
             continue
+        if name in ("brave", "tavily") and collected:
+            break   # paid or quota-bound providers are a last resort: never spent to "merge" a second source
         try:
             rows = fn()
         except Exception as e:
@@ -96,6 +137,10 @@ def web_search(query: str, category: str = "general", max_results: int = 8,
     out = _dedupe(collected, max_results)
     if served:
         log.info("web_search served by %s (%d results)", "+".join(served), len(out))
+    if out:
+        cache = _cache_load()
+        cache[key] = {"t": time.time(), "rows": out, "by": served}
+        _cache_save(cache)
     return out
 
 
