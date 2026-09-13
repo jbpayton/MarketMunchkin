@@ -156,6 +156,15 @@ The active style applies from the next session.
   symbol's research dossier is reused within the research window. Finnhub (news, earnings calendar) and
   StockTwits (social buzz) are free too. All managed from the Config tab; keys go to `.env`, never to the model.
 
+## The intraday experiment (shadow-only)
+
+A versioned opening-range continuation experiment runs alongside the agent, in its own thread, and never places orders:
+a deterministic detector over completed 5-minute IEX bars, a bounded structured catalyst classifier, three variants
+(mechanical, classifier-filtered, options-expressed) with analytical outcomes and cash-constrained $500 / $750 books,
+conservative shadow fills, censored outcomes when data is missing, and a risk envelope that can only tighten the
+active style. `munchkin experiment --enable | --tick | --report | --signal N`. Design, defaults and limitations:
+`docs/intraday-experiment.md`.
+
 ## The Lab (phase one)
 
 Claims about the market get a lifecycle instead of a diary entry. A hypothesis is proposed by you (Brain page, or

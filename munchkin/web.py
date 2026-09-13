@@ -636,6 +636,46 @@ async def api_lab_action(request: Request):
     return {"ok": True}
 
 
+@app.get("/api/experiments")
+def api_experiments():
+    from .experiments import ExperimentStore, ExperimentRunner, ExperimentConfig
+    c = ctx()
+    store = ExperimentStore(c.journal)
+    exp = store.latest("orb_continuation") or store.register(ExperimentConfig(), notes="registered by the dashboard")
+    rep = ExperimentRunner(store, exp, c.market, c.broker).report()
+    sigs = store.signals(exp["id"], limit=40)
+    for s in sigs:
+        s["decisions"] = store.decisions(s["id"])
+        s["outcomes"] = store.outcomes(s["id"])
+    rep["recent_signals"] = sigs
+    rep["versions"] = store.all()
+    rep["events"] = [dict(r) for r in store.conn.execute("SELECT * FROM exp_events WHERE experiment_id=? ORDER BY id DESC LIMIT 20", (exp["id"],)).fetchall()]
+    return rep
+
+
+@app.post("/api/experiments")
+async def api_experiments_action(request: Request):
+    from .experiments import ExperimentStore
+    if request.headers.get("x-requested-with") != "munchkin":
+        raise HTTPException(403, "bad request origin")
+    body = await request.json()
+    store = ExperimentStore(ctx().journal)
+    exp = store.get(int(body.get("id") or 0)) or store.latest("orb_continuation")
+    action = body.get("action")
+    if not exp:
+        raise HTTPException(400, "no experiment")
+    if action in ("shadow", "disable"):
+        if not store.set_status(exp["id"], "shadow" if action == "shadow" else "disabled", "operator (dashboard)"):
+            raise HTTPException(400, "cannot change status")
+    elif action == "clear_breaker":
+        store.conn.execute("UPDATE exp_portfolios SET blocked=0, blocked_reason=NULL WHERE experiment_id=?", (exp["id"],)); store.conn.commit()
+        store.event(exp["id"], "operator", "breakers cleared")
+    else:
+        raise HTTPException(400, "unknown action (live activation is not available in this version)")
+    ctx().journal.add_event("experiment", f"{exp['name']} v{exp['version']}: {action} (dashboard)")
+    return {"ok": True}
+
+
 @app.get("/api/skills")
 def api_skills():
     from .skills import SkillStore

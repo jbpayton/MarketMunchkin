@@ -65,7 +65,12 @@ CREATE TABLE IF NOT EXISTS iv_history (date TEXT, symbol TEXT, iv30 REAL, rv20 R
 CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, session_id INTEGER, kind TEXT, priority INTEGER,
   text TEXT, status TEXT DEFAULT 'open', done_at TEXT, result TEXT);
 CREATE TABLE IF NOT EXISTS breadth_history (date TEXT PRIMARY KEY, data TEXT);
+CREATE TABLE IF NOT EXISTS reservations (key TEXT PRIMARY KEY, amount REAL, created_at TEXT, expires_at TEXT, note TEXT);
 """
+MIGRATIONS = [  # (table, column, type) added when missing; legacy rows keep NULL = unknown attribution
+    ("decisions", "strategy_id", "INTEGER"), ("decisions", "experiment_id", "INTEGER"), ("decisions", "execution_mode", "TEXT"),
+    ("trades", "strategy_id", "INTEGER"), ("trades", "experiment_id", "INTEGER"), ("trades", "execution_mode", "TEXT"),
+]
 
 
 class Journal:
@@ -74,9 +79,50 @@ class Journal:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         PLAYBOOK_HISTORY.mkdir(exist_ok=True)
         if not PLAYBOOK_FILE.exists():
             PLAYBOOK_FILE.write_text(DEFAULT_PLAYBOOK)
+
+    def _migrate(self) -> None:
+        for table, col, typ in MIGRATIONS:
+            cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if col not in cols:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+        self.conn.commit()
+
+    # ------------------------------------------------------------------ reservations (cash holds)
+    def reserve(self, key: str, amount: float, available: float, ttl_s: int = 180, note: str = "") -> tuple[bool, float]:
+        """Atomically hold `amount` of cash if it fits in `available` minus the other live holds. Serialised with an
+        immediate transaction so two entry paths (a session and the watcher thread, or two processes) cannot both pass."""
+        now = now_et()
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute("DELETE FROM reservations WHERE expires_at < ?", (now.isoformat(timespec="seconds"),))
+            others = float(self.conn.execute("SELECT COALESCE(SUM(amount), 0) FROM reservations WHERE key != ?", (key,)).fetchone()[0])
+            if amount > available - others + 1e-9:
+                self.conn.execute("COMMIT")
+                return False, others
+            self.conn.execute("INSERT OR REPLACE INTO reservations(key, amount, created_at, expires_at, note) VALUES (?,?,?,?,?)",
+                              (key, float(amount), now.isoformat(timespec="seconds"), (now + dt.timedelta(seconds=ttl_s)).isoformat(timespec="seconds"), note))
+            self.conn.execute("COMMIT")
+            return True, others
+        except Exception:
+            try:
+                self.conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+
+    def release(self, key: str) -> None:
+        self.conn.execute("DELETE FROM reservations WHERE key=?", (key,))
+        self.conn.commit()
+
+    def reserved_total(self, exclude_key: str | None = None) -> float:
+        now = now_et().isoformat(timespec="seconds")
+        self.conn.execute("DELETE FROM reservations WHERE expires_at < ?", (now,))
+        q = "SELECT COALESCE(SUM(amount), 0) FROM reservations" + (" WHERE key != ?" if exclude_key else "")
+        return float(self.conn.execute(q, (exclude_key,) if exclude_key else ()).fetchone()[0])
 
     # ------------------------------------------------------------------ kv
     def get(self, key: str, default: Any = None) -> Any:

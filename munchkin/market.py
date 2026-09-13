@@ -172,6 +172,19 @@ class Market:
         log.warning("snapshots served by yfinance fallback for %d symbols", len(symbols))
         return out
 
+    def bars_realtime(self, symbols: list[str], timeframe: str = "5Min", limit: int = 120) -> pd.DataFrame:
+        """Completed intraday bars from the IEX feed up to now (the SIP path lags 16 minutes by design). IEX volume is a
+        fraction of consolidated volume, so relative-volume features must compare IEX with IEX history, never with SIP."""
+        tf, days_per_bar, pad = _TF[timeframe]
+        start = now_et() - dt.timedelta(days=limit * days_per_bar + pad + 2)
+        req = StockBarsRequest(symbol_or_symbols=[s.upper() for s in symbols], timeframe=tf, start=start, end=now_et(), feed=DataFeed.IEX, adjustment="raw")
+        df = self.stocks.get_stock_bars(req).df
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.copy()
+        df["received_at"] = now_et().isoformat(timespec="seconds")
+        return df
+
     def price(self, symbol: str) -> float | None:
         return self.snapshots([symbol]).get(symbol.upper(), {}).get("price")
 

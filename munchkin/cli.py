@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .config import DATA_DIR, HALT_FILE, LOG_DIR, SETTINGS
+from .llm import LLMClient
 
 app = typer.Typer(help="MarketMunchkin: autonomous LLM trading agent on Alpaca (paper).", no_args_is_help=True)
 screener_app = typer.Typer(help="Technical screener over the universe.")
@@ -116,6 +117,52 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
     wq: "queue.Queue[tuple[str, str]]" = queue.Queue()
     watcher_thread: dict = {"t": None}
     market_state = {"open": False}
+
+    def _experiment_loop() -> None:
+        """Shadow-only intraday experiment runner (docs/intraday-experiment.md). Own context; never places broker orders."""
+        from .experiments import ExperimentStore, ExperimentRunner, ExperimentConfig
+        from .search import web_search
+        from . import screener as scr
+        ectx = make_context()
+        store = ExperimentStore(ectx.journal)
+        runner = None
+        last_universe: dt.datetime | None = None
+        universe: list[str] = []
+        dollar_vol: dict[str, float] = {}
+        while not stop_requested["flag"]:
+            t0 = time.time()
+            try:
+                exp = store.latest("orb_continuation")
+                if exp is None:
+                    exp = store.register(ExperimentConfig(), notes="default configuration registered by the daemon")
+                if exp["status"] in ("shadow", "live") and market_state["open"]:
+                    now = now_et()
+                    if last_universe is None or (now - last_universe).total_seconds() > 3600:
+                        table, _ = scr.load()
+                        if table is not None and "avg_dollar_vol20_m" in table.columns:
+                            cfg = store.config(exp)
+                            t = table[~table.get("is_etf", False).astype(bool)] if "is_etf" in table.columns else table
+                            t = t.sort_values("avg_dollar_vol20_m", ascending=False).head(cfg.universe_max)
+                            universe = list(t.index)
+                            dollar_vol = {s: float(v) * 1e6 for s, v in t["avg_dollar_vol20_m"].items()}
+                        last_universe = now
+                    if runner is None or runner.exp["id"] != exp["id"] or runner.exp["status"] != exp["status"]:
+                        runner = ExperimentRunner(store, exp, ectx.market, ectx.broker, llm=LLMClient(), news_search=web_search, universe=universe, dollar_volume=dollar_vol,
+                                                  chain_fn=lambda u: ectx.market.option_chain(u, 5, 30, 40.0, None))
+                    runner.universe, runner.dollar_volume = universe, dollar_vol
+                    res = runner.tick()
+                    if res.get("new_signals") or res.get("fills") or res.get("exits"):
+                        logging.info("experiment tick: %s", {k: res[k] for k in ("new_signals", "classified", "fills", "exits")})
+                        ectx.journal.add_event("experiment", f"{exp['name']} v{exp['version']}: {res['new_signals']} signals, {res['classified']} classified, {res['fills']} shadow fills, {res['exits']} exits")
+                elif runner is not None and exp["status"] in ("shadow", "live"):
+                    runner.tick()   # off-session: resolves outcomes and forced exits only
+            except Exception as e:
+                logging.warning("experiment tick failed: %s", e)
+            sleep_s = (30 if market_state["open"] else 120) - (time.time() - t0)
+            for _ in range(int(max(1.0, sleep_s))):
+                if stop_requested["flag"]:
+                    return
+                time.sleep(1)
 
     def _watcher_loop() -> None:
         """Own context (own SQLite connection, broker and risk engine); ticks every poll interval no matter what the main loop is doing."""
@@ -370,6 +417,8 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         if watcher_thread["t"] is None:
             watcher_thread["t"] = threading.Thread(target=_watcher_loop, name="watcher", daemon=True)
             watcher_thread["t"].start()
+            watcher_thread["e"] = threading.Thread(target=_experiment_loop, name="experiment", daemon=True)
+            watcher_thread["e"].start()
         while True:
             try:
                 kind, text = wq.get_nowait()
@@ -539,6 +588,41 @@ def notify(text: str, kind: str = typer.Option("fills", help="fills | errors | b
     """Send a test message to the paired Telegram chats."""
     from .telegram import notify as _notify
     console.print("sent" if _notify(text, kind=kind, force=True) else "[red]not sent: token missing, no paired chat, or API error[/red]")
+
+
+@app.command()
+def experiment(report: bool = typer.Option(False, help="print the A/B/C comparison"),
+               enable: bool = typer.Option(False, help="set the latest version to shadow mode"),
+               disable: bool = typer.Option(False, help="disable the latest version"),
+               tick: bool = typer.Option(False, help="run one runner tick now (shadow; no orders)"),
+               signal: Optional[int] = typer.Option(None, help="print one signal with its decisions, quotes and outcomes")) -> None:
+    """The intraday experiment (opening-range continuation, shadow-only). See docs/intraday-experiment.md."""
+    from .experiments import ExperimentStore, ExperimentRunner, ExperimentConfig
+    from .journal import Journal
+    store = ExperimentStore(Journal())
+    exp = store.latest("orb_continuation") or store.register(ExperimentConfig(), notes="registered from the CLI")
+    if enable:
+        store.set_status(exp["id"], "shadow", "operator (cli)"); exp = store.get(exp["id"]); console.print(f"v{exp['version']} -> shadow")
+    if disable:
+        store.set_status(exp["id"], "disabled", "operator (cli)"); exp = store.get(exp["id"]); console.print(f"v{exp['version']} -> disabled")
+    if signal:
+        s = store.signal(signal)
+        if not s:
+            console.print("[red]no such signal[/red]"); return
+        console.print(Panel(json.dumps({"signal": s, "decisions": store.decisions(signal), "outcomes": store.outcomes(signal)}, indent=1, default=str)[:6000], title=f"signal #{signal}"))
+        return
+    if tick:
+        from .agent import make_context
+        from .llm import LLMClient
+        from .search import web_search
+        ctx = make_context()
+        runner = ExperimentRunner(store, exp, ctx.market, ctx.broker, llm=LLMClient(), news_search=web_search, chain_fn=lambda u: ctx.market.option_chain(u, 5, 30, 40.0, None))
+        console.print(runner.tick())
+    if report or not (enable or disable or tick):
+        from .agent import make_context
+        ctx = make_context()
+        r = ExperimentRunner(store, exp, ctx.market, ctx.broker).report()
+        console.print(Panel(json.dumps(r, indent=1, default=str)[:9000], title=f"{exp['name']} v{exp['version']} [{exp['status']}]"))
 
 
 @app.command()

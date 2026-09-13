@@ -111,10 +111,10 @@ class RiskEngine:
                 if o.get("notional"):
                     pending += float(o["notional"])
                 elif o.get("limit_price") and o.get("qty"):
-                    mult = 100.0 if is_option(o["symbol"]) else 1.0
+                    mult = self.multiplier(o["symbol"]) if is_option(o["symbol"]) else 1.0
                     pending += float(o["limit_price"]) * float(o["qty"]) * mult
             elif o.get("order_class") == "mleg" and o.get("limit_price") and o.get("qty"):
-                pending += abs(float(o["limit_price"])) * float(o["qty"]) * 100.0
+                pending += abs(float(o["limit_price"])) * float(o["qty"]) * self.multiplier(o["symbol"])
         v_equity = equity - offset
         v_cash = cash - offset
         v_settled = max(0.0, min(v_cash, cash - unsettled - offset) - pending)
@@ -154,6 +154,21 @@ class RiskEngine:
     def grade_multiplier(self, grade: str | None) -> float:
         return {"speculative": self.L.size_mult_speculative, "none": self.L.size_mult_no_catalyst}.get(grade or "confirmed", 1.0)
 
+    _mult_cache: dict[str, float] = {}
+
+    def multiplier(self, symbol: str) -> float:
+        """Contract multiplier from the contract record (adjusted contracts are not 100). Cached per symbol."""
+        if symbol in RiskEngine._mult_cache:
+            return RiskEngine._mult_cache[symbol]
+        m = 100.0
+        try:
+            c = self.b.option_contract(symbol)
+            m = float(c.get("size") or c.get("multiplier") or 100.0)
+        except Exception:
+            pass
+        RiskEngine._mult_cache[symbol] = m
+        return m
+
     def _entry_common(self, st: RiskState, cost: float, symbol: str, positions: list[dict], grade: str | None = None) -> list[str]:
         v: list[str] = []
         cap = st.max_position_notional * self.grade_multiplier(grade)
@@ -165,8 +180,13 @@ class RiskEngine:
         held = {p["symbol"] for p in positions}
         if symbol not in held and st.positions_count >= self.L.max_positions:
             v.append(f"max positions ({self.L.max_positions}) reached")
-        if cost > st.virtual_settled_cash + 0.01:
-            v.append(f"cost ${cost:.2f} exceeds settled buying power ${st.virtual_settled_cash:.2f} (cash-only, T+1 settlement)")
+        held_cash = 0.0
+        try:
+            held_cash = self.j.reserved_total()
+        except Exception:
+            pass
+        if cost > st.virtual_settled_cash - held_cash + 0.01:
+            v.append(f"cost ${cost:.2f} exceeds settled buying power ${st.virtual_settled_cash:.2f}" + (f" less ${held_cash:.2f} held by orders in flight" if held_cash else "") + " (cash-only, T+1 settlement)")
         root = parse_occ(symbol)["underlying"] if parse_occ(symbol) else symbol
         existing = sum(float(p["cost_basis"]) for p in positions
                        if (parse_occ(p["symbol"])["underlying"] if parse_occ(p["symbol"]) else p["symbol"]) == root)
@@ -273,9 +293,9 @@ class RiskEngine:
         if limit_price is None:
             if not self.L.allow_market_orders_options:
                 v.append("options require a limit order (market orders disabled)")
-            cost = float(info.get("ask") or 0) * 100 * qty
+            cost = float(info.get("ask") or 0) * self.multiplier(symbol) * qty
         else:
-            cost = limit_price * 100 * qty
+            cost = limit_price * self.multiplier(symbol) * qty
             ask = info.get("ask")
             if ask and limit_price > ask * 1.03 + 0.01:
                 v.append(f"limit ${limit_price:.2f} is more than 3% above ask ${ask:.2f}; do not overpay")
@@ -332,7 +352,7 @@ class RiskEngine:
             est += mid if p["side"] == "buy" else -mid
         if limit_price and est and limit_price > est * 1.15 + 0.05:
             v.append(f"net debit ${limit_price:.2f} is well above the mid-based estimate ${est:.2f}; tighten the price")
-        cost = (limit_price or 0) * 100 * qty
+        cost = (limit_price or 0) * (self.multiplier(legs[0]["symbol"]) if legs else 100.0) * qty
         if not st.market_open:
             v.append("market is closed; option orders are day-only")
         v += self._entry_common(st, cost, parsed[0]["underlying"] if parsed else "?", positions, grade)
