@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS reservations (key TEXT PRIMARY KEY, amount REAL, crea
 MIGRATIONS = [  # (table, column, type) added when missing; legacy rows keep NULL = unknown attribution
     ("decisions", "strategy_id", "INTEGER"), ("decisions", "experiment_id", "INTEGER"), ("decisions", "execution_mode", "TEXT"),
     ("trades", "strategy_id", "INTEGER"), ("trades", "experiment_id", "INTEGER"), ("trades", "execution_mode", "TEXT"),
+    ("tasks", "attempts", "INTEGER DEFAULT 0"), ("tasks", "deferred_until", "TEXT"),
 ]
 
 
@@ -426,12 +427,27 @@ class Journal:
         self.conn.commit()
         return int(cur.lastrowid)
 
-    def open_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
-        rows = self.conn.execute("SELECT * FROM tasks WHERE status='open' ORDER BY priority ASC, id ASC LIMIT ?", (limit,)).fetchall()
-        return [dict(r) for r in rows]
+    def open_tasks(self, limit: int = 20, include_deferred: bool = True) -> list[dict[str, Any]]:
+        q = "SELECT * FROM tasks WHERE status='open'" + ("" if include_deferred else " AND (deferred_until IS NULL OR deferred_until <= ?)") + " ORDER BY priority ASC, id ASC LIMIT ?"
+        args = (limit,) if include_deferred else (now_et().isoformat(timespec="seconds"), limit)
+        return [dict(r) for r in self.conn.execute(q, args).fetchall()]
+
+    def touch_task(self, task_id: int, defer_minutes: int = 120, max_attempts: int = 3) -> str:
+        """A session ran this task without completing it: defer it so the next sessions do other work; abandon after max_attempts."""
+        row = self.conn.execute("SELECT attempts, status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not row or row["status"] != "open":
+            return "closed"
+        attempts = int(row["attempts"] or 0) + 1
+        if attempts >= max_attempts:
+            self.complete_task(task_id, f"abandoned after {attempts} sessions without completion (a task needs a reachable 'done')", status="abandoned")
+            return "abandoned"
+        until = (now_et() + dt.timedelta(minutes=defer_minutes)).isoformat(timespec="seconds")
+        self.conn.execute("UPDATE tasks SET attempts=?, deferred_until=? WHERE id=?", (attempts, until, task_id))
+        self.conn.commit()
+        return f"deferred until {until[11:16]} (attempt {attempts} of {max_attempts})"
 
     def next_task(self) -> dict[str, Any] | None:
-        t = self.open_tasks(1)
+        t = self.open_tasks(1, include_deferred=False)
         return t[0] if t else None
 
     def complete_task(self, task_id: int, result: str = "", status: str = "done") -> bool:

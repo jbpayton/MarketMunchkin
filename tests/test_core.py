@@ -645,3 +645,15 @@ def test_search_free_first_cache_and_pacing(tmp_path, monkeypatch):
     assert P.within_budget("tavily") is False
     monkeypatch.setattr(P, "usage_today", lambda p: 0)
     assert P.within_budget("tavily") is True
+
+
+def test_uncompleted_tasks_are_deferred_then_abandoned(tmp_path):
+    from munchkin.journal import Journal
+    j = Journal(tmp_path / "t.db")
+    tid = j.add_task("do a thing", 2, None, "research")
+    assert j.next_task()["id"] == tid
+    assert j.touch_task(tid, 120).startswith("deferred")
+    assert j.next_task() is None                                 # deferred tasks are not dispatched again immediately
+    assert j.open_tasks(5)[0]["id"] == tid                       # but still visible as open
+    assert j.touch_task(tid, 120).startswith("deferred") and j.touch_task(tid, 120) == "abandoned"
+    assert j.open_tasks(5) == [] and j.touch_task(tid, 120) == "closed"

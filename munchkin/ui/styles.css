@@ -67,3 +67,4 @@ svg text{font-family:var(--mono)}
 .seg button{white-space:nowrap}
 .grid>.card{display:flex;flex-direction:column}
 .dot#live.on{box-shadow:0 0 0 4px color-mix(in srgb, var(--up) 35%, transparent);transition:box-shadow .2s}
+.bar[style*='display:flex'] i{position:static;height:100%;display:block;border-radius:0}

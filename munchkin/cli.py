@@ -452,6 +452,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
             cooled = since_end >= (W.min_gap_seconds if W.continuous else W.event_cooldown_min * 60)
             due_base = in_window and (W.continuous or last_intraday is None or (now - last_intraday).total_seconds() >= W.intraday_interval_min * 60)
             if in_window and cooled and (pending or due_base):
+                queued_id = None
                 if pending:
                     task, phase = "EVENT: " + " | ".join(pending), "event"
                     pending = []
@@ -464,10 +465,15 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                         j.complete_task(nt["id"], "reflect session run")
                         task, phase = f"SELF-ASSIGNED TASK #{nt['id']}: {nt['text']}", "reflect"
                     elif nt:
+                        queued_id = nt["id"]
                         task, phase = f"SELF-ASSIGNED TASK #{nt['id']} (close it with complete_task when done): {nt['text']}", "intraday"
                     else:
                         task, phase = _rotation_task(), "intraday"
                 _run(phase, task)
+                if queued_id:
+                    outcome = j.touch_task(queued_id, 120)
+                    if outcome != "closed":
+                        j.add_event("session", f"task #{queued_id} not completed by its session: {outcome}")
 
         # off hours: work the queue at any hour; reflect only inside the off-hours windows (bounded per day)
         else:
@@ -484,6 +490,9 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                         _run("reflect", f"SELF-ASSIGNED TASK #{nt['id']}: {nt['text']}")
                     else:
                         _run("research", f"SELF-ASSIGNED TASK #{nt['id']} (close it with complete_task when done): {nt['text']}")
+                        outcome = j.touch_task(nt["id"], 120)
+                        if outcome != "closed":
+                            j.add_event("session", f"task #{nt['id']} not completed by its session: {outcome}")
                 elif _in_study(now) and _study_done_tonight() < W.study_per_night:
                     from .knowledge import KnowledgeBase
                     picks = KnowledgeBase().next_topics(3)

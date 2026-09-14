@@ -1476,6 +1476,10 @@ class ToolRegistry:
             if not c.memory_writes:
                 return "task queue is read-only in this mode"
             kind = kind if kind in ("task", "reflect", "research", "experiment") else "task"
+            import re as _re
+            if _re.search(r"\b(standing|recurring|on every session|every session|each session|ongoing)\b", text, _re.I):
+                return ("REJECTED: the queue is for one-off work with a reachable 'done'. Recurring monitoring belongs to armed entries (arm_entry), "
+                        "the watcher, or the Lab (propose_hypothesis / run_hypothesis_test); a standing task would re-run every session and starve the book.")
             tid = c.journal.add_task(text, max(1, min(int(priority), 5)), c.session_id, kind)
             return f"task #{tid} queued (priority {priority}, kind {kind}); the daemon will hand it to a future session"
 
