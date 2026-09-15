@@ -85,6 +85,16 @@ def _lessons_block(j: Journal, n: int = 20) -> str:
     return "\n".join(f"- {l['text'][:300]}" for l in ls)
 
 
+def _book_block(b: Broker, j: Journal, s: Settings, style: str, st: RiskState) -> str:
+    try:
+        from . import screener as scr
+        from .book import book_state, book_state_text
+        table, _ = scr.load()
+        return book_state_text(book_state(b, j, s.risk, style, table, st))
+    except Exception as e:
+        return f"(book state unavailable: {e})"
+
+
 def _skills_block() -> str:
     try:
         from .skills import SkillStore
@@ -205,6 +215,9 @@ Sessions run back to back during market hours and periodically outside them: con
 6. {ending}
 
 Keep tool calls purposeful (max {s.llm.max_tool_calls} per session). Now: {st.date}; market {'OPEN' if st.market_open else 'CLOSED'}.
+
+## Book state (computed, not your guess; the policy below is enforced by the risk engine)
+{_book_block(b, j, s, style, st)}
 
 ## Using the state of the world
 The regime score, breadth, sectors and the cross-asset dials in get_market_context are not decoration: let them direct where you look

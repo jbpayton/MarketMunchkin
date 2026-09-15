@@ -159,13 +159,13 @@ def execute_entry(rec: dict[str, Any], price: float, risk, broker, market, journ
         return execute_option_entry(rec, price, risk, broker, market, journal, exits, limits or SETTINGS.risk)
     pos = broker.positions()
     st = risk.state(positions=pos)
-    viol = risk.check_stock_buy(sym, rec["notional"], price, "market", None, st, pos, rec.get("catalyst_grade"))
+    viol = risk.check_stock_buy(sym, rec["notional"], price, "market", None, st, pos, rec.get("catalyst_grade"), horizon=rec.get("horizon"))
     trimmed = None
     if viol:
         new_notional, trimmed = clamp_to_cap(float(rec["notional"]), viol)
         if trimmed:
             rec = dict(rec, notional=new_notional)
-            viol = risk.check_stock_buy(sym, rec["notional"], price, "market", None, st, pos, rec.get("catalyst_grade"))
+            viol = risk.check_stock_buy(sym, rec["notional"], price, "market", None, st, pos, rec.get("catalyst_grade"), horizon=rec.get("horizon"))
     if not st.market_open:
         viol.append("market closed")
     if viol:

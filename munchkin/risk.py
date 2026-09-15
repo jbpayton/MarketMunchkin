@@ -169,7 +169,69 @@ class RiskEngine:
         RiskEngine._mult_cache[symbol] = m
         return m
 
-    def _entry_common(self, st: RiskState, cost: float, symbol: str, positions: list[dict], grade: str | None = None) -> list[str]:
+    def _sector_of(self, symbol: str) -> str | None:
+        try:
+            from . import screener as scr
+            t, _ = scr.load()
+            root = parse_occ(symbol)["underlying"] if parse_occ(symbol) else symbol
+            if t is not None and root in t.index and "sector" in t.columns:
+                s = t.loc[root, "sector"]
+                return str(s) if s == s and s else None
+        except Exception:
+            return None
+        return None
+
+    def _atr_of(self, symbol: str) -> float | None:
+        try:
+            from . import screener as scr
+            t, _ = scr.load()
+            root = parse_occ(symbol)["underlying"] if parse_occ(symbol) else symbol
+            if t is not None and root in t.index and "atr14_pct" in t.columns:
+                a = t.loc[root, "atr14_pct"]
+                return float(a) if a == a else None
+        except Exception:
+            return None
+        return None
+
+    def policy_checks(self, st: RiskState, cost: float, symbol: str, positions: list[dict], horizon: str | None, is_opt: bool) -> list[str]:
+        """Portfolio policy: cash reserve, sector cap, slow-thesis cap, return-on-time for stock. Exits are never affected."""
+        from .book import expected_move_pct, parse_horizon_days
+        v: list[str] = []
+        L = self.L
+        eq = float(st.virtual_equity or 0)
+        reserve = eq * float(getattr(L, "min_cash_pct", 0) or 0)
+        if reserve and st.virtual_settled_cash - cost < reserve - 0.01:
+            v.append(f"the {getattr(L, 'min_cash_pct', 0) * 100:.0f}% cash reserve (${reserve:.2f}) would be breached: settled ${st.virtual_settled_cash:.2f} minus ${cost:.2f}; deployable is ${max(0, st.virtual_settled_cash - reserve):.2f}")
+        sec = self._sector_of(symbol)
+        cap_sec = float(getattr(L, "max_sector_pct", 1.0) or 1.0)
+        if sec and eq and cap_sec < 1.0:
+            same = 0.0
+            for p in positions:
+                if self._sector_of(p["symbol"]) == sec:
+                    same += abs(float(p.get("market_value") or p.get("cost_basis") or 0))
+            if (same + cost) / eq > cap_sec + 1e-9:
+                v.append(f"sector cap: {sec} would be {(same + cost) / eq * 100:.0f}% of equity > {cap_sec * 100:.0f}%")
+        hd = parse_horizon_days(horizon)
+        slow_days = float(getattr(L, "slow_horizon_days", 5) or 5)
+        cap_slow = float(getattr(L, "max_slow_pct", 1.0) or 1.0)
+        if hd is not None and hd > slow_days and eq and cap_slow < 1.0:
+            slow = 0.0
+            for p in positions:
+                th = self.j.thesis_for(p["symbol"]) or {}
+                d = parse_horizon_days(th.get("horizon"))
+                if d is not None and d > slow_days:
+                    slow += abs(float(p.get("market_value") or p.get("cost_basis") or 0))
+            if (slow + cost) / eq > cap_slow + 1e-9:
+                v.append(f"slow-thesis cap: a {hd:g}-day thesis would put {(slow + cost) / eq * 100:.0f}% of equity in theses slower than {slow_days:g}d (> {cap_slow * 100:.0f}% under this style); express it faster or as an option")
+        bar = float(getattr(L, "min_expected_move_pct", 0) or 0)
+        if not is_opt and bar > 0 and hd is not None:
+            atr = self._atr_of(symbol)
+            em = expected_move_pct(atr, hd)
+            if em is not None and em < bar:
+                v.append(f"return-on-time: ATR {atr:.2f}%/day over {hd:g} days is an expected move of ~{em:.1f}% < the style's {bar:.0f}% bar; a stock position here cannot pay for its holding period (use an option expression or a faster name)")
+        return v
+
+    def _entry_common(self, st: RiskState, cost: float, symbol: str, positions: list[dict], grade: str | None = None, horizon: str | None = None) -> list[str]:
         v: list[str] = []
         cap = st.max_position_notional * self.grade_multiplier(grade)
         cap_note = "" if self.grade_multiplier(grade) == 1.0 else f" (catalyst grade '{grade}' scales the cap by {self.grade_multiplier(grade):.2f})"
@@ -195,6 +257,10 @@ class RiskEngine:
         probe_max = float(getattr(self.L, "probe_max", 0) or 0)
         if probe_max and existing <= 0.01 and cost > probe_max + 0.01:
             v.append(f"first entry into {root} is a probe: ${cost:.2f} > the style's probe maximum ${probe_max:.0f}; open the probe, then add on evidence up to the cap")
+        try:
+            v += self.policy_checks(st, cost, symbol, positions, horizon, bool(parse_occ(symbol)))
+        except Exception as e:
+            v.append(f"policy check unavailable: {str(e)[:80]}")
         return v
 
     def avg_dollar_volume(self, symbol: str) -> float | None:
@@ -208,8 +274,8 @@ class RiskEngine:
 
     # ------------------------------------------------------------------ stock checks
     def check_stock_buy(self, symbol: str, notional: float, price: float | None, order_type: str,
-                        limit_price: float | None, st: RiskState, positions: list[dict], grade: str | None = None) -> list[str]:
-        v = self._entry_common(st, notional, symbol, positions, grade)
+                        limit_price: float | None, st: RiskState, positions: list[dict], grade: str | None = None, horizon: str | None = None) -> list[str]:
+        v = self._entry_common(st, notional, symbol, positions, grade, horizon)
         if not st.market_open and order_type == "market":
             v.append("market is closed; market orders are blocked (use a limit order or wait)")
         if price is None:
@@ -286,7 +352,7 @@ class RiskEngine:
         return v
 
     def check_option_buy(self, symbol: str, qty: int, limit_price: float | None, st: RiskState,
-                         positions: list[dict], acct_level: int, grade: str | None = None) -> tuple[list[str], dict[str, Any]]:
+                         positions: list[dict], acct_level: int, grade: str | None = None, horizon: str | None = None) -> tuple[list[str], dict[str, Any]]:
         info = self._contract_info(symbol)
         v = self.check_option_leg_quality(symbol, info)
         if not self.L.allow_options or not self.L.allow_singles:
@@ -304,7 +370,7 @@ class RiskEngine:
                 v.append(f"limit ${limit_price:.2f} is more than 3% above ask ${ask:.2f}; do not overpay")
         if not st.market_open:
             v.append("market is closed; option orders are day-only and will be rejected or sit until the open")
-        v += self._entry_common(st, cost, symbol, positions, grade)
+        v += self._entry_common(st, cost, symbol, positions, grade, horizon)
         if cost > st.max_new_options_premium + 0.01:
             v.append(f"premium ${cost:.2f} exceeds remaining options budget ${st.max_new_options_premium:.2f} ({self.L.max_options_pct*100:.0f}% of equity cap)")
         info["cost"] = round(cost, 2)

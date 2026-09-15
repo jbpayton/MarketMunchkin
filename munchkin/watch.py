@@ -90,6 +90,20 @@ class Watcher:
             if abs(move) >= thr and not self._recently(f"move:{s}", self.cfg.target_renotify_min):
                 events.append(f"MOVE: {s} {move:+.1f}% since last session (now {px})")
                 self._mark(f"move:{s}")
+        # thesis horizons: a position past its journaled horizon is a decision, not a drift
+        from .book import parse_horizon_days, trading_days_between
+        for p in positions:
+            th = self.j.thesis_for(p["symbol"]) or {}
+            hd = parse_horizon_days(th.get("horizon"))
+            if hd is None or not th.get("ts"):
+                continue
+            try:
+                age = trading_days_between(dt.datetime.fromisoformat(th["ts"]), now_et())
+            except Exception:
+                continue
+            if age >= hd and not self._recently(f"hz:{p['symbol']}", 24 * 60):
+                self._mark(f"hz:{p['symbol']}")
+                events.append(f"HORIZON: {occ_human(p['symbol'])} thesis horizon {hd:g}d elapsed ({age}d, {float(p.get('unrealized_plpc') or 0) * 100:+.2f}%): exit or re-thesis in writing")
         # targets / option levels
         for p in positions:
             sym = p["symbol"]

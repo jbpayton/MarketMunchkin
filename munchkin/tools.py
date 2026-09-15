@@ -772,6 +772,14 @@ class ToolRegistry:
         self.add("note_hypothesis", "Append a note to a hypothesis (what the test showed, what to try next, why it was left).",
                  _schema({"id": _p("id", "integer", "hypothesis id"), "text": _p("text", "string", "note")}, ["id", "text"]), note_hypothesis)
 
+        def get_book_state() -> str:
+            from . import screener as scr
+            from .book import book_state, book_state_text
+            table, _ = scr.load()
+            return book_state_text(book_state(c.broker, c.journal, c.settings.risk, getattr(c, "style", "balanced"), table, c.risk.state()))
+
+        self.add("get_book_state", "The portfolio as data: cash vs the style's reserve, deployable cash, each position's sector/beta/horizon/age/progress, concentration and style-fit flags, and what the state calls for.", _schema({}, []), get_book_state)
+
         def get_market_context() -> str:
             c.research.note_context()
             snaps = c.market.snapshots(_CONTEXT_ETFS)
@@ -896,7 +904,7 @@ class ToolRegistry:
                 cost *= 1.01  # slippage cushion
             pos = self._positions()
             st = c.risk.state(positions=pos)
-            viol = c.research.gate(symbol) + c.risk.check_stock_buy(symbol, cost, price, order_type, limit_price, st, pos, grade)
+            viol = c.research.gate(symbol) + c.risk.check_stock_buy(symbol, cost, price, order_type, limit_price, st, pos, grade, horizon=horizon)
             if qty is not None and float(qty) != int(float(qty)) and order_type == "limit":
                 viol.append("fractional quantities require market orders (use notional or whole shares for limits)")
             ref = est_px or price
@@ -988,7 +996,7 @@ class ToolRegistry:
             pp = parse_occ(sym)
             pos = self._positions()
             st = c.risk.state(positions=pos)
-            viol, info = c.risk.check_option_buy(sym, int(qty), float(limit_price), st, pos, self._acct_level(), grade)
+            viol, info = c.risk.check_option_buy(sym, int(qty), float(limit_price), st, pos, self._acct_level(), grade, horizon=horizon)
             viol = (c.research.gate(pp["underlying"]) if pp else []) + viol
             if stop_premium is not None and not (0 < float(stop_premium) < float(limit_price)):
                 viol.append(f"stop_premium {stop_premium} must be below the limit price {limit_price}")
@@ -1265,6 +1273,10 @@ class ToolRegistry:
                 viol.append(f"notional ${float(notional):.2f} exceeds the cap ${cap:.2f} for grade '{grade}'")
             if float(notional) > st.virtual_settled_cash + 0.01:
                 viol.append(f"notional exceeds settled cash ${st.virtual_settled_cash:.2f}")
+            try:
+                viol += c.risk.policy_checks(st, float(notional), u, pos, horizon, expression != "stock")
+            except Exception:
+                pass
             nb = None
             if not_before:
                 try:

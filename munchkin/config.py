@@ -86,8 +86,14 @@ class RiskLimits(BaseModel):
     allow_options: bool = True             # style-controlled (Defensive: false)
     allow_spreads: bool = True             # debit verticals (short leg covered in the same order)
     allow_singles: bool = True             # bought calls / puts
-    probe_min: int = 50                    # prompt guidance only
+    probe_min: int = 50                    # first entry into a name must sit between probe_min and probe_max (enforced)
     probe_max: int = 100
+    # portfolio policy (enforced at the risk boundary and shown as book state)
+    min_cash_pct: float = 0.25             # settled-cash reserve: entries may not take settled cash below this share of equity
+    max_sector_pct: float = 0.50           # stock + options exposure per sector (screener sector)
+    max_slow_pct: float = 0.60             # capital in theses slower than slow_horizon_days
+    slow_horizon_days: float = 5.0
+    min_expected_move_pct: float = 2.0     # return-on-time bar for STOCK entries: ATR% x sqrt(horizon days) must clear this (options are exempt)
 
 
 LLM_PRESETS = {

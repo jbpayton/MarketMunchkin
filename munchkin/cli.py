@@ -270,12 +270,25 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                 return (now - dt.datetime.fromisoformat(v)).total_seconds() / 3600
             except Exception:
                 return 1e9
-        board = ("DUTY: OPPORTUNITY BOARD. Rank the 5 best trade candidates for the next 1-3 sessions with exact entry (price or trigger), "
-                 "stop, target, size (size_position), expression (stock / call / put / debit spread with the IV read) and catalyst grade with source. "
-                 "If a setup is valid at the current price, BUY the probe now (buy_stock / buy_option) and, if you want more on weakness, arm the add-on; "
-                 "arm-only is for triggers that are genuinely not met yet (breakouts, reclaims, event-conditioned entries) and they must sit within one "
-                 "daily ATR of the price. Setups whose backtest measured entry at the signal close are bought at the signal, not below it. A board that "
-                 "ends with zero new exposure while candidates qualify needs a one-line reason per candidate.")
+        board = ("DUTY: OPPORTUNITY BOARD. Cash is a position and deploying is not the goal. Rank the best candidates for the next 1-3 sessions "
+                 "that clear the style's return-on-time bar (get_book_state shows deployable cash; the risk engine refuses entries that breach the "
+                 "reserve, the sector cap, the slow-thesis cap, or the expected-move bar). For each: exact entry (price or trigger), stop, target, "
+                 "size (a probe, then adds on evidence), expression (stock / call / put / debit spread with the IV read) and catalyst grade with source. "
+                 "If a setup is valid at the current price, open the probe now; arm only genuinely conditional entries within one daily ATR. "
+                 "Setups whose backtest measured entry at the signal close are bought at the signal, not below it. Ending flat is fine when nothing clears the bar; say so in one line.")
+        try:
+            from . import screener as scr
+            from .book import book_state
+            bs = book_state(ctx.broker, j, ctx.settings.risk, get_style(j), scr.load()[0], ctx.risk.state())
+            if bs["flags"] and age_h("duty:rebalance") > 1.0:
+                j.set("duty:rebalance", now.isoformat(timespec="seconds"))
+                return ("DUTY: REBALANCE. The book is outside its policy: " + " | ".join(bs["flags"]) + ". This calls for: " + " | ".join(bs["calls_for"])
+                        + ". Decide, name by name, what to trim, exit, re-thesis or keep, and act (sell_stock / set_exit_levels / record_note). No new research, no new entries.")
+            if bs["deployable"] < float(getattr(ctx.settings.risk, "probe_min", 50) or 50):
+                return ("DUTY: MONITOR (no deployable cash). Check every held and armed name against the tape and fresh news; adjust a stop or target only if "
+                        "its thesis changed; take targets; note which position you would cut first if a better setup appeared. No new entries or arms.")
+        except Exception as e:
+            logging.warning("book state for duty selection failed: %s", e)
         if age_h("duty:brief_verified") > 3 and age_h("world_brief_ts") > 3:
             j.set("duty:brief_verified", now.isoformat(timespec="seconds"))
             return "DUTY: re-verify every number in the world brief with get_macro_data / get_macro_release; rewrite it with sources. Then do the opportunity board."
@@ -366,6 +379,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
 
     from .styles import effective_limits, effective_watch, get_style
     current_style = None
+    ctx.settings = SETTINGS.model_copy(update={"risk": effective_limits(SETTINGS.risk, get_style(j))})
     while True:
         now = now_et()
         today = now.date().isoformat()

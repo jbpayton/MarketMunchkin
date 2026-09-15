@@ -1,3 +1,4 @@
+import pytest
 """Fast unit tests for the pure-python parts (no network). Run: .venv/bin/python -m pytest -q"""
 import datetime as dt
 import pathlib
@@ -684,3 +685,60 @@ def test_lab_error_verdict_does_not_move_a_claim(tmp_path):
     for _ in range(3):
         lab.record_test(hid, "custom", {}, {"error": "no RESULT line"}, "error", ["no RESULT line"])
     assert lab.get(hid)["status"] == "specified"                          # three harness failures reject nothing
+
+
+def test_portfolio_policy_reserve_sector_slow_and_return_on_time(monkeypatch):
+    from munchkin.risk import RiskEngine, RiskState
+    from munchkin.styles import effective_limits
+    from munchkin.config import RiskLimits
+    from munchkin import risk as R
+    e = RiskEngine.__new__(RiskEngine); e.L = effective_limits(RiskLimits(), "aggressive")
+    class J:
+        def reserved_total(self): return 0.0
+        def thesis_for(self, sym): return {"horizon": "3-10 trading days"} if sym in ("SO", "PNW") else {"horizon": "hours"}
+    e.j = J()
+    monkeypatch.setattr(RiskEngine, "_sector_of", lambda self, s: {"SO": "Utilities", "PNW": "Utilities", "NEE": "Utilities", "NVDA": "Information Technology"}.get(s))
+    monkeypatch.setattr(RiskEngine, "_atr_of", lambda self, s: {"NEE": 1.2, "NVDA": 3.5}.get(s))
+    st = RiskState.__new__(RiskState); st.max_position_notional = 250.0; st.halted = False; st.daily_loss_breached = False; st.positions_count = 2
+    st.virtual_equity = 500.0; st.virtual_settled_cash = 150.0
+    held = [{"symbol": "SO", "cost_basis": "100", "market_value": "100"}, {"symbol": "PNW", "cost_basis": "195", "market_value": "195"}]
+    # reserve: 20% of $500 = $100 must stay; $100 more leaves $50 -> refused
+    v = e.policy_checks(st, 100.0, "NVDA", held, "hours", False)
+    assert any("cash reserve" in x for x in v)
+    st.virtual_settled_cash = 300.0
+    # sector cap: utilities already 59% -> any utility add refused
+    assert any("sector cap" in x for x in e.policy_checks(st, 50.0, "NEE", held, "hours", False))
+    # slow-thesis cap under aggressive (40%): 59% already slow -> a 10-day thesis anywhere is refused
+    assert any("slow-thesis cap" in x for x in e.policy_checks(st, 50.0, "NVDA", held, "10 days", False))
+    # return-on-time: a 1.2% ATR name over 5 days is ~2.7% < the 3% aggressive bar; as an option it is exempt
+    v = e.policy_checks(st, 50.0, "NEE", [], "5 days", False)
+    assert any("return-on-time" in x for x in v)
+    assert not any("return-on-time" in x for x in e.policy_checks(st, 50.0, "NEE", [], "5 days", True))
+    assert not any("return-on-time" in x for x in e.policy_checks(st, 50.0, "NVDA", [], "2 days", False))   # 3.5% x sqrt(2) = 4.9%
+    # defensive has no return-on-time bar and a bigger reserve
+    e.L = effective_limits(RiskLimits(), "defensive")
+    assert not any("return-on-time" in x for x in e.policy_checks(st, 50.0, "NEE", [], "10 days", False))
+    st.virtual_settled_cash = 160.0
+    assert any("30% cash reserve" in x for x in e.policy_checks(st, 50.0, "NVDA", [], "hours", False))
+
+
+def test_book_state_flags_and_horizon_parsing():
+    from munchkin.book import book_state, parse_horizon_days, trading_days_between
+    from munchkin.styles import effective_limits
+    from munchkin.config import RiskLimits
+    import datetime as dt, pandas as pd
+    from munchkin.util import ET
+    assert [parse_horizon_days(x) for x in ("2-5 trading days", "hours", "1-2 weeks", "intraday", None)] == [5.0, 0.5, 10.0, 0.5, None]
+    assert trading_days_between(dt.datetime(2026, 9, 10, 10, 0, tzinfo=ET), dt.datetime(2026, 9, 15, 10, 0, tzinfo=ET)) == pytest.approx(3.08, abs=0.01)
+    class B:
+        def positions(self): return [{"symbol": "SO", "market_value": "100", "avg_entry_price": "86.9", "current_price": "86.9", "unrealized_plpc": "0"},
+                                     {"symbol": "PNW", "market_value": "195", "avg_entry_price": "95.4", "current_price": "95.4", "unrealized_plpc": "0"}]
+    class J:
+        def thesis_for(self, sym): return {"horizon": "3-10 trading days", "ts": "2026-09-14T10:32:00-04:00", "target": "100"}
+    class S: virtual_equity, virtual_settled_cash = 500.0, 5.11
+    table = pd.DataFrame({"sector": ["Utilities", "Utilities"], "beta_spy": [0.3, 0.5], "atr14_pct": [1.1, 1.2]}, index=["SO", "PNW"])
+    bs = book_state(B(), J(), effective_limits(RiskLimits(), "aggressive"), "aggressive", table, S())
+    assert not bs["reserve_ok"] and bs["deployable"] == 0.0
+    assert any("cash $5.11 is below" in f for f in bs["flags"]) and any("Utilities 59%" in f for f in bs["flags"]) and any("slow theses" in f for f in bs["flags"])
+    assert not any("PNW is 39.0%" in f for f in bs["flags"])                  # 39% is under the 50% aggressive position cap; the probe rule is at entry
+    assert bs["positions"][1]["slow"] and bs["positions"][1]["expected_move_pct"] == pytest.approx(3.79, abs=0.01)

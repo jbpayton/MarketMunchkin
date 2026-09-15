@@ -69,6 +69,27 @@ These hold in every style and cannot be changed from the dashboard, the prompt, 
   to commit capital until the session has read the market context, run a broad scan, charted several candidates
   and grounded the name in news.
 
+## Portfolio policy and book state
+
+Caps per position were never enough: the book could end fully invested in slow, low-beta names under an aggressive
+style with no cash left for the agility the style is about. The risk engine now also enforces a **portfolio policy**
+per style, and every session sees the **book state** as data (cash versus reserve, deployable cash, each position's
+sector, beta, horizon, age and progress, concentration and style-fit flags, and what the state calls for):
+
+| | Defensive | Balanced | Aggressive |
+|---|---|---|---|
+| settled-cash reserve | 30% | 25% | 20% |
+| sector cap | 50% | 50% | 50% |
+| capital in slow theses (> 5 sessions) | no cap | 60% | 40% |
+| return-on-time bar for stock entries | none | 2% | 3% |
+| first entry into a name (probe) | $50–75 | $50–100 | $100–150 |
+
+The return-on-time bar is the daily ATR times the square root of the holding days: a stock position has to be able to
+pay for its holding period, or it is expressed as an option, which is what the aggressive style is for. Duties follow
+the state: a book outside its policy gets a rebalance duty (decide what to trim, no new research), a book with no
+deployable cash gets a monitor duty, and the opportunity board runs only when there is cash to deploy. The watcher
+raises an event when a position's journaled horizon elapses, and the agent must exit or re-thesis in writing.
+
 ## Trading styles
 
 Three operator-selected styles change the risk envelope, the instruments, the cadence and the agent's brief.
