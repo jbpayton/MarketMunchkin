@@ -389,7 +389,7 @@ def detect_signals(bars: pd.DataFrame, spy_bars: pd.DataFrame | None, cfg: Exper
         if rs_signed is None or rs_signed < cfg.rs_min_pct:
             counters["rs_below"] = counters.get("rs_below", 0) + 1
             continue
-        out.append({"symbol": sym, "direction": direction, "bar_end": bar_end.isoformat(timespec="seconds"), "close": close, "or_high": or_hi, "or_low": or_lo,
+        out.append({"symbol": sym, "direction": direction, "bar_end": bar_end.astimezone(ET).isoformat(timespec="seconds"), "close": close, "or_high": or_hi, "or_low": or_lo,
                     "edge": edge, "extension_pct": round(extension, 3), "relvol": round(relvol, 2), "move_since_open_pct": round(move, 3),
                     "spy_move_pct": None if spy_move is None else round(spy_move, 3), "rs_pct": None if rs is None else round(rs, 3),
                     "cum_volume_iex": cum_today, "relvol_Runs": len(hist), "bar_minutes": cfg.bar_minutes,
@@ -428,14 +428,26 @@ def classify_signal(llm: Any, market: Any, sig: dict[str, Any], cfg: ExperimentC
             f"Move since open {sig['features'].get('move_since_open_pct')}% vs SPY {sig['features'].get('spy_move_pct')}%, relative volume {sig['features'].get('relvol')}x.\n"
             f"Evidence (headlines available at decision time):\n" + ("\n".join(evidence) if evidence else "(none)"))
     try:
-        r = llm.chat([{"role": "system", "content": CLASSIFIER_SYSTEM}, {"role": "user", "content": user}], max_tokens=600, temperature=0.0, reasoning_effort="low")
-        txt = (r.get("message") or {}).get("content") or ""
+        # a reasoning model can spend the whole budget thinking and return empty content: give it room, ask for no
+        # deliberation, and accept a JSON object found in the reasoning field as a last resort
+        r = llm.chat([{"role": "system", "content": CLASSIFIER_SYSTEM + " Reply with the JSON object only, no preamble, no deliberation."},
+                      {"role": "user", "content": user + "\n\nJSON only."}], max_tokens=2000, temperature=0.0, reasoning_effort="low")
+        msg = r.get("message") or {}
+        txt = msg.get("content") or ""
         m = re.search(r"\{.*\}", txt, re.S)
-        payload = json.loads(m.group(0)) if m else None
+        if not m and msg.get("reasoning_content"):
+            m = re.search(r"\{[^{}]*\"event_type\"[^{}]*\}", msg["reasoning_content"], re.S)
+        payload = None
+        if m:
+            try:
+                payload = json.loads(m.group(0))
+            except Exception:
+                payload = None
         latency = int((time.time() - t0) * 1000)
         model_id = getattr(llm, "model", "?")
         if not payload:
-            return "error", {"error": "no json in reply", "raw": txt[:300], "evidence": evidence}, latency, model_id
+            fin = (r.get("finish_reason") or msg.get("finish_reason") or "")
+            return "error", {"error": f"no json in reply (finish={fin or '?'}, content {len(txt)} chars, reasoning {len(msg.get('reasoning_content') or '')} chars)", "raw": txt[:300], "evidence": evidence}, latency, model_id
         payload["evidence"] = evidence
         payload["evidence_hash"] = hashlib.sha256("\n".join(evidence).encode()).hexdigest()[:16]
         if payload.get("abstain") or payload.get("event_type") in (None, "none"):

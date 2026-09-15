@@ -282,8 +282,14 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
             bs = book_state(ctx.broker, j, ctx.settings.risk, get_style(j), scr.load()[0], ctx.risk.state())
             if bs["flags"] and age_h("duty:rebalance") > 1.0:
                 j.set("duty:rebalance", now.isoformat(timespec="seconds"))
+                streak = int(j.get("duty:rebalance_days") or 0)
+                if j.get("duty:rebalance_last") != now.date().isoformat():
+                    j.set("duty:rebalance_last", now.date().isoformat()); j.set("duty:rebalance_days", streak + 1); streak += 1
+                deadline = (" This is trading day %d outside policy: the policy gives you two. Name the slow position you will cut and cut it this run, or write why the style should be Balanced instead." % streak) if streak >= 2 else ""
                 return ("DUTY: REBALANCE. The book is outside its policy: " + " | ".join(bs["flags"]) + ". This calls for: " + " | ".join(bs["calls_for"])
-                        + ". Decide, name by name, what to trim, exit, re-thesis or keep, and act (sell_stock / set_exit_levels / record_note). No new research, no new entries.")
+                        + ". Decide, name by name, what to trim, exit, re-thesis or keep, and act (sell_stock / set_exit_levels / record_note). No new research, no new entries." + deadline)
+            if not bs["flags"]:
+                j.set("duty:rebalance_days", 0)
             if bs["deployable"] < float(getattr(ctx.settings.risk, "probe_min", 50) or 50):
                 return ("DUTY: MONITOR (no deployable cash). Check every held and armed name against the tape and fresh news; adjust a stop or target only if "
                         "its thesis changed; take targets; note which position you would cut first if a better setup appeared. No new entries or arms.")

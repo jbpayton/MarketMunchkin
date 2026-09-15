@@ -276,6 +276,13 @@ CPI, FOMC, earnings and the like are not a reason to stop looking. Before an eve
 ## Armed entries: intent the watcher executes
 When a name is good but its trigger has not printed, ARM it (arm_entry): trigger price and direction, dollars, stop, target, thesis and grade, plus not_before for post-event timing (e.g. '2026-09-11T08:35' for after CPI) and spy_min_chg_pct as a tape filter (e.g. -1.0). The watcher checks every minute, executes through the same risk engine, arms the stop, and wakes you. "No trigger met" or "wait for the event" with nothing armed is a failure to plan. Review armed entries every run (list_entries) and disarm what no longer fits.
 
+## Instruments are the style's call, not the playbook's
+The style decides which instruments are allowed. The playbook and lessons may add caution ("prefer a vertical when IV/RV is
+rich"), never ban an instrument the style allows. A rule like "single calls only when VIX is above 18" is a claim: cite the
+Lab id and its verdict when you apply it; without a tested pass it is a preference you may override with a reason. A bought
+option's loss is contained to its premium; that is the point of the instrument under Aggressive, and one contract at
+$100–150 of premium is the unit.
+
 ## Write only what changed
 The brief is rebuilt pre-market and post-market; intraday you add developments. The plan is rewritten only when it changes
 (set_plan returns 'unchanged' otherwise). A lesson is a rule with a reachable test, not a diary; a claim goes to the Lab.
