@@ -1,6 +1,6 @@
 """Book state: what the portfolio looks like as data, and what that state calls for.
 
-Computed in code every session (never guessed by the model): cash versus the style's reserve, each position's sector,
+Computed in code every run (never guessed by the model): cash versus the style's reserve, each position's sector,
 beta, horizon, age and progress, concentration and style-fit flags. The risk engine enforces the portfolio policy
 (reserve, sector cap, slow-thesis cap, return-on-time bar); this module makes the same facts visible.
 """
@@ -18,7 +18,7 @@ SESSION_HOURS = 6.5
 
 
 def parse_horizon_days(text: str | None) -> float | None:
-    """'2-5 trading days' -> 5, '3-10d' -> 10, 'hours' -> 0.5, '1-2 weeks' -> 10, 'intraday' -> 0.5, 'same session' -> 0.5.
+    """'2-5 trading days' -> 5, '3-10d' -> 10, 'hours' -> 0.5, '1-2 weeks' -> 10, 'intraday' -> 0.5, 'same trading day' -> 0.5.
     Uses the upper bound: a thesis is as slow as the longest it allows itself."""
     if not text:
         return None
@@ -52,7 +52,7 @@ def expected_move_pct(atr_pct: float | None, horizon_days: float | None) -> floa
 
 
 def trading_days_between(a: dt.datetime, b: dt.datetime) -> float:
-    """Approximate sessions elapsed (weekdays), fractional within a day."""
+    """Approximate Runs elapsed (weekdays), fractional within a day."""
     if b <= a:
         return 0.0
     days = 0.0

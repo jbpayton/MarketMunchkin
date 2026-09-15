@@ -11,7 +11,7 @@ flowchart TD
         direction LR
         R1["market context read"] --- R2["broad scan run"] --- R3["≥ N candidates charted"] --- R4["name grounded in news"] --- R5["dossier exists"]
     end
-    RG -->|evidence counts for 3 h across sessions| FR
+    RG -->|evidence counts for 3 h across runs| FR
 
     subgraph FR["2 · Fixed rules — every style, never overridable  (munchkin/styles.py · risk.py)"]
         direction LR

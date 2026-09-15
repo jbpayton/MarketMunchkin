@@ -23,7 +23,7 @@ Use whenever an idea is good but the price is not there yet, or a catalyst has a
 
 ## Rules of thumb
 - Arm two or three, not eight. Each arm is a promise to take the trade; if you would hesitate when it fires, do not arm it.
-- Re-check every arm at the start of each session (list_entries): still valid thesis, still the right level, still the right tape filter. Disarm anything stale, and say why in the disarm reason.
+- Re-check every arm at the start of each run (list_entries): still valid thesis, still the right level, still the right tape filter. Disarm anything stale, and say why in the disarm reason.
 - If price runs through the trigger while the filter blocks it, let it go. The filter was the point.
 - One arm per name. A second idea on the same name replaces the first.
 - Arms count toward the per-underlying cap when they fire; the engine sizes them then, not now.

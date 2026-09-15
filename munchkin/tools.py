@@ -153,7 +153,7 @@ class ToolRegistry:
 
     def _trading_gate(self) -> str | None:
         if not self.ctx.allow_trading:
-            return "ERROR: trading is disabled in this mode (read-only session)."
+            return "ERROR: trading is disabled in this mode (read-only run)."
         return None
 
     # ------------------------------------------------------------------ registration
@@ -683,7 +683,7 @@ class ToolRegistry:
             from .knowledge import KnowledgeBase
             return KnowledgeBase().index_text(60)
 
-        self.add("list_knowledge", "List the library: durable notes written by study sessions (slug, title, summary, date).", _schema({}, []), list_knowledge)
+        self.add("list_knowledge", "List the library: durable notes written by STUDY runs (slug, title, summary, date).", _schema({}, []), list_knowledge)
 
         def get_knowledge(topic: str) -> str:
             from .knowledge import KnowledgeBase
@@ -705,16 +705,16 @@ class ToolRegistry:
                 return f"REJECTED: cite at least one URL or domain you actually read (fetch_page/web_search results); received {[str(x)[:40] for x in sources][:4]}"
             p = KnowledgeBase().save(topic, title, body, [str(x) for x in sources], summary or None)
             c.journal.add_event("knowledge", f"library note saved: {slugify(topic)} ({len(body)} chars)")
-            return f"saved {p.name} ({len(body)} chars); it now appears in the Library index of every session"
+            return f"saved {p.name} ({len(body)} chars); it now appears in the Library index of every run"
 
-        self.add("save_knowledge", "Save or update a library note (study sessions). Body <= 6000 chars, structured: what it is / how it moves markets / what to watch / how MarketMunchkin should use it. Cite URLs.",
+        self.add("save_knowledge", "Save or update a library note (STUDY runs). Body <= 6000 chars, structured: what it is / how it moves markets / what to watch / how MarketMunchkin should use it. Cite URLs.",
                  _schema({"topic": _p("topic", "string", "slug, e.g. credit-spreads"), "title": _p("title", "string", "human title"), "body": _p("body", "string", "markdown"),
                           "sources": _p("sources", "array", "URLs read", items={"type": "string"}), "summary": _p("summary", "string", "one line (optional)")}, ["topic", "title", "body", "sources"]), save_knowledge)
 
         # ---------------- the lab: hypotheses -> tests -> (operator) promotion
         SPEC_DOC = ("spec = {trigger: {kind: 'declarative', conditions: {spy_chg_pct: {lte: -1.5}}} | {kind: 'dates', dates: ['2025-04-04', ...]} | "
                     "{kind: 'screen', expr: 'rsi14 < 30 and sma200_dist_pct > -6'}, universe: ['SPY'] | 'screener:sector=Energy', side: 'long' | 'bearish', "
-                    "holding: {sessions: 5, stop_pct: 3}, expected: {horizon: '+5d', effect_pct: 1.5}, expression: 'stock' | 'call' | 'put' | 'call_spread' | 'put_spread'}")
+                    "holding: {Runs: 5, stop_pct: 3}, expected: {horizon: '+5d', effect_pct: 1.5}, expression: 'stock' | 'call' | 'put' | 'call_spread' | 'put_spread'}")
 
         def propose_hypothesis(title: str, statement: str) -> str:
             from .lab import Lab
@@ -840,7 +840,7 @@ class ToolRegistry:
                 parts.append(f"Current world brief (updated {(c.journal.get('world_brief_ts') or '')[:16]}):\n{wb[:2500]}")
             return "\n\n".join(parts)
 
-        self.add("get_market_context", "State of the world in one call: index/sector/rates/commodity/vol ETF moves, a computed REGIME score (trend, breadth, VIX level and term structure), breadth stats and trend, sector performance table, general market headlines, web news on markets and geopolitics, and the saved world brief. Call this first in every session.",
+        self.add("get_market_context", "State of the world in one call: index/sector/rates/commodity/vol ETF moves, a computed REGIME score (trend, breadth, VIX level and term structure), breadth stats and trend, sector performance table, general market headlines, web news on markets and geopolitics, and the saved world brief. Call this first in every run.",
                  _schema({}), get_market_context)
 
         def set_world_brief(text: str) -> str:
@@ -856,7 +856,7 @@ class ToolRegistry:
                 return "REJECTED: " + why
             missing = B.missing_sections(text)
             B.rewrite(c.journal, text, c.session_id)
-            return "world brief rebuilt; every session sees it plus what changed since its last session" + (f". Sections not found: {', '.join(missing)} (use headings: Regime, Drivers, Themes, Calendar, Risks, Facts)" if missing else "")
+            return "world brief rebuilt; every run sees it plus what changed since its last run" + (f". Sections not found: {', '.join(missing)} (use headings: Regime, Drivers, Themes, Calendar, Risks, Facts)" if missing else "")
 
         def add_development(section: str, text: str, source: str) -> str:
             if c.dry_run or not c.memory_writes:
@@ -867,10 +867,10 @@ class ToolRegistry:
             b = B.add_development(c.journal, section, text, source, c.session_id)
             return "added to the brief: " + b
 
-        self.add("add_development", "Append one timestamped, sourced development to the world brief without rewriting it (intraday and event sessions). section: Regime | Drivers | Themes | Calendar | Risks | Facts.",
+        self.add("add_development", "Append one timestamped, sourced development to the world brief without rewriting it (intraday and EVENT runs). section: Regime | Drivers | Themes | Calendar | Risks | Facts.",
                  _schema({"section": _p("section", "string", "which section it belongs to"), "text": _p("text", "string", "one or two sentences"), "source": _p("source", "string", "outlet + time, or tool")}, ["section", "text", "source"]), add_development)
 
-        self.add("set_world_brief", "REBUILD the 'state of the world' brief (pre-market, research, post-market; intraday sessions use add_development). Use the headings Regime, Drivers, Themes, Calendar, Risks, Facts. Save/replace the: macro regime and risk appetite, key events today/this week (data, Fed, earnings, geopolitics), sector leadership/laggards, live themes with tickers, and known risks. Refresh it pre-market and whenever something material changes.",
+        self.add("set_world_brief", "REBUILD the 'state of the world' brief (pre-market, research, post-market; INTRADAY runs use add_development). Use the headings Regime, Drivers, Themes, Calendar, Risks, Facts. Save/replace the: macro regime and risk appetite, key events today/this week (data, Fed, earnings, geopolitics), sector leadership/laggards, live themes with tickers, and known risks. Refresh it pre-market and whenever something material changes.",
                  _schema({"text": _p("text", "string", "the brief (10-25 lines, markdown ok)")}, ["text"]), set_world_brief)
 
         # ---------------- options data
@@ -1187,18 +1187,18 @@ class ToolRegistry:
                 return f"ERROR: a lesson is a rule in one or two sentences (max 400 chars; this was {len(text)}), not a diary entry. Put the narrative in record_note and state the rule here."
             if c.dry_run or not c.memory_writes:
                 c.journal.add_note(f"[dry-run lesson, not saved] {text}", c.session_id)
-                return "noted (dry-run/read-only sessions do not write lessons)"
+                return "noted (dry-run/read-only runs do not write lessons)"
             c.journal.add_lesson(text, source=f"session:{c.session_id}", tags=tags)
             return "lesson recorded"
 
-        self.add("record_lesson", "Save a durable lesson learned (shown in future sessions). Be specific and actionable.",
+        self.add("record_lesson", "Save a durable lesson learned (shown in future runs). Be specific and actionable.",
                  _schema({"text": _p("text", "string", "the lesson"), "tags": _p("tags", "string", "comma tags, e.g. options,sizing")}, ["text"]), record_lesson)
 
         def record_note(text: str) -> str:
             c.journal.add_note(text, c.session_id)
             return "note recorded"
 
-        self.add("record_note", "Save a working note/observation for this session (not a lesson).", _schema({"text": _p("text", "string", "note")}, ["text"]), record_note)
+        self.add("record_note", "Save a working note/observation for this run (not a lesson).", _schema({"text": _p("text", "string", "note")}, ["text"]), record_note)
 
         def set_plan(text: str) -> str:
             if c.dry_run or not c.memory_writes:
@@ -1207,10 +1207,10 @@ class ToolRegistry:
             norm = lambda t: re.sub(r"\s+", " ", (t or "")).strip().lower()  # noqa: E731
             if norm(text) == norm(c.journal.get_plan()):
                 c.plan_set = True
-                return "plan unchanged (not rewritten); the next session sees the same plan with its original timestamp"
+                return "plan unchanged (not rewritten); the next run sees the same plan with its original timestamp"
             c.journal.set_plan(text)
             c.plan_set = True
-            return "plan saved; it will be shown at the start of the next session"
+            return "plan saved; it will be shown at the start of the next run"
 
         self.add("set_plan", "Save the plan for the next session: per-position stops/targets/actions, watchlist with entry triggers, what to check first. Always call this before finishing.",
                  _schema({"text": _p("text", "string", "plan text (markdown ok)")}, ["text"]), set_plan)
@@ -1234,7 +1234,7 @@ class ToolRegistry:
             return md_table([{"ts": r["ts"][5:16], "kind": _kind(r), "symbol": occ_human(r["symbol"]) if is_option(r["symbol"]) else r["symbol"], "side": r["side"], "qty": r["qty"], "price": r["price"], "status": r["status"], "grade": (json.loads(r["meta"] or "{}").get("catalyst_grade")), "thesis": (r["thesis"] or "")[:90], "target": r["target"], "stop": r["stop"]} for r in rows])
 
         self.add("get_journal", "Read your memory: decisions (with theses), trades (closed round-trips with P&L), lessons, notes, or past session summaries.",
-                 _schema({"what": _p("what", "string", "decisions | trades | lessons | notes | sessions"), "limit": _p("limit", "integer", "default 15"),
+                 _schema({"what": _p("what", "string", "decisions | trades | lessons | notes | Runs"), "limit": _p("limit", "integer", "default 15"),
                           "symbol": _p("symbol", "string", "filter decisions by symbol")}, []), get_journal)
 
         def update_playbook(new_markdown: str) -> str:
@@ -1535,11 +1535,11 @@ class ToolRegistry:
                 return "task queue is read-only in this mode"
             kind = kind if kind in ("task", "reflect", "research", "experiment") else "task"
             import re as _re
-            if _re.search(r"\b(standing|recurring|on every session|every session|each session|ongoing)\b", text, _re.I):
+            if _re.search(r"\b(standing|recurring|on every run|every run|each run|ongoing)\b", text, _re.I):
                 return ("REJECTED: the queue is for one-off work with a reachable 'done'. Recurring monitoring belongs to armed entries (arm_entry), "
-                        "the watcher, or the Lab (propose_hypothesis / run_hypothesis_test); a standing task would re-run every session and starve the book.")
+                        "the watcher, or the Lab (propose_hypothesis / run_hypothesis_test); a standing task would re-run every run and starve the book.")
             tid = c.journal.add_task(text, max(1, min(int(priority), 5)), c.session_id, kind)
-            return f"task #{tid} queued (priority {priority}, kind {kind}); the daemon will hand it to a future session"
+            return f"task #{tid} queued (priority {priority}, kind {kind}); the daemon will hand it to a future run"
 
         self.add("add_task", "Give yourself work for a future session: research to do, a hypothesis to test, a name to watch for a trigger, a rule to evaluate, or 'reflect' to request a free-thinking session. Priority 1 (urgent) to 5 (whenever). The daemon runs open tasks in order between events.",
                  _schema({"text": _p("text", "string", "what to do and what 'done' looks like"), "priority": _p("priority", "integer", "1-5, default 2"),

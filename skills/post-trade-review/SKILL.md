@@ -5,7 +5,7 @@ tags: review, learning
 ---
 # Post-trade review
 
-Use in post-market and reflect sessions for every trade closed since the last review (get_journal trades, unreviewed first), and weekly on the whole book with `trade_stats.py`.
+Use in post-market and REFLECT runs for every trade closed since the last review (get_journal trades, unreviewed first), and weekly on the whole book with `trade_stats.py`.
 
 ## Per trade: five questions
 1. **Was the thesis right?** Compare the journaled thesis and catalyst grade with what actually happened to the name and the catalyst. Right thesis / wrong outcome and wrong thesis / lucky outcome are both common; name which.

@@ -1,6 +1,6 @@
 """Research-breadth tracking and the entry gate.
 
-The tracker records what the model actually looked at during a session. Entry
+The tracker records what the model actually looked at during a run. Entry
 tools consult `gate()` so capital cannot be committed to a name that was never
 charted or grounded in news, or before a broad scan happened.
 """
@@ -16,9 +16,9 @@ CATALYST_GRADES = ("confirmed", "speculative", "none")
 
 @dataclass
 class ResearchTracker:
-    """What the agent has actually looked at. With continuous sessions a few minutes apart the evidence has to carry
+    """What the agent has actually looked at. With continuous runs a few minutes apart the evidence has to carry
     over: everything noted here is stamped and persisted through the journal, and the gate counts anything inside
-    `window_hours` (default 3h), not just the current session."""
+    `window_hours` (default 3h), not just the current run."""
     charted: set[str] = field(default_factory=set)
     newsed: set[str] = field(default_factory=set)
     dossiers: set[str] = field(default_factory=set)

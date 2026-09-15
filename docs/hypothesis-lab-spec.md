@@ -96,7 +96,7 @@ All tests run in the existing sandbox (no network, no credentials) on datasets t
 - **Script**: a sandbox script returning `[{symbol, price, note}]`, run in monitor duties (bounded, no LLM).
 - Signals go to `shadow_signals` while shadowing; when live they call the strategy's action: `arm` (default; an armed
   entry with the strategy's stop/target/chase/filters and `strategy_id`), `buy` (probe at market, only if the style
-  allows and the gate is satisfied by the strategy's standing dossier), or `wake` (event session with the skill loaded).
+  allows and the gate is satisfied by the strategy's standing dossier), or `wake` (EVENT run with the skill loaded).
 
 ## Tools (agent)
 
@@ -123,11 +123,11 @@ The agent may recommend; only the operator promotes, demotes, or changes a budge
 
 - Off hours, a **LAB** duty joins study: pick the oldest `proposed` and specify it; pick the oldest `specified` and test
   it; re-test anything `tested` more than 30 days ago; summarise shadow books. Budget per night in `[lab]`
-  (`lab_sessions_per_night`, default 4). Tokens are free on a local model; wall-clock is not: LM Studio serialises
+  (`lab_Runs_per_night`, default 4). Tokens are free on a local model; wall-clock is not: LM Studio serialises
   requests, so lab work yields to any market-hours duty and to operator requests.
 - Post-market: the review reads strategy attribution and proposes retirements or new hypotheses from the day's lessons
   (replacing the current free-form "record a lesson" for anything that is really a claim).
-- Study sessions get a closing step: "state one testable hypothesis from what you learned", which lands as `proposed`.
+- STUDY runs get a closing step: "state one testable hypothesis from what you learned", which lands as `proposed`.
 
 ## Safety
 

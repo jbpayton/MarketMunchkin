@@ -83,7 +83,7 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
         errs.append("side must be long or bearish (this book never shorts stock; bearish views are expressed with bought puts)")
     hold = spec.get("holding")
     if not isinstance(hold, dict) or not isinstance(hold.get("sessions"), int) or not 1 <= hold["sessions"] <= 60:
-        errs.append("holding.sessions must be an integer 1-60 (stop_pct / target_pct optional)")
+        errs.append("holding.Runs must be an integer 1-60 (stop_pct / target_pct optional)")
     exp = spec.get("expected")
     if not isinstance(exp, dict) or not re.match(r"^\+\d{1,2}d$", str(exp.get("horizon", ""))) or not isinstance(exp.get("effect_pct"), (int, float)):
         errs.append("expected: {horizon: '+5d', effect_pct: 1.5}")

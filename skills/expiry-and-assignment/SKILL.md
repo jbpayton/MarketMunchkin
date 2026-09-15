@@ -13,7 +13,7 @@ The fixed rule: no option is held into expiration. The watcher enforces it (wake
 - If it is a loser inside the stop, the stop already fired or should have; check.
 
 ## At 1 DTE (the wake)
-- Close during regular hours, with a limit near the mid; leave the DAY order working and check it filled before the session ends. Options are DAY-only orders here, so a resting limit will not survive to tomorrow.
+- Close during regular hours, with a limit near the mid; leave the DAY order working and check it filled before the run ends. Options are DAY-only orders here, so a resting limit will not survive to tomorrow.
 - A vertical is closed as one multi-leg order (close_spread). Never leg out by selling the long first: an open short leg alone is exactly what the engine forbids, and it will refuse the second order.
 
 ## Expiry day

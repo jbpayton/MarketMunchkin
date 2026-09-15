@@ -1,8 +1,8 @@
 """The world brief as a versioned document instead of a rewritten essay.
 
 Full rewrites are allowed in the phases that rebuild the picture (pre-market, research, post-market, reflect). Intraday
-and event sessions append timestamped developments to it. Every version is kept, and each session is shown what
-changed since the agent's previous session, so the picture accumulates instead of churning.
+and EVENT runs append timestamped developments to it. Every version is kept, and each run is shown what
+changed since the agent's previous run, so the picture accumulates instead of churning.
 """
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def add_development(journal: Any, section: str, text: str, source: str, session_
 
 
 def since(journal: Any, session_id: int | None) -> str:
-    """Lines added or removed since the brief the agent saw in its previous session (by session id), capped."""
+    """Lines added or removed since the brief the agent saw in its previous run (by session id), capped."""
     h = history(journal)
     if len(h) < 2:
         return "(no earlier version to compare)"
@@ -92,7 +92,7 @@ def rewrite_allowed(journal: Any, phase: str, min_gap_hours: float = 2.0) -> tup
         age_h = 99
     if age_h >= min_gap_hours:
         return True, ""
-    return False, f"the brief was rebuilt {age_h:.1f}h ago; intraday sessions add developments (add_development) rather than rewrite. Rewrites happen pre-market, in research, and post-market."
+    return False, f"the brief was rebuilt {age_h:.1f}h ago; INTRADAY runs add developments (add_development) rather than rewrite. Rewrites happen pre-market, in research, and post-market."
 
 
 def outline(text: str) -> list[str]:

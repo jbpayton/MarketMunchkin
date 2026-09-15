@@ -11,7 +11,7 @@ shadow mode: it never places broker orders. Live routing is deliberately not a c
   operational `mode` is not part of the identity. `munchkin experiment` registers the default version if none exists.
 - **Detector** (`orb-continuation/1`): completed 5-minute IEX bars; the first 30 minutes of the regular session form
   the range; inside the entry window (10:00–14:00 ET) a completed close outside the range, no more than 1.0% past the
-  edge, with time-of-day-adjusted relative volume ≥ 1.5 (IEX cumulative volume against the prior 10 sessions' cumulative
+  edge, with time-of-day-adjusted relative volume ≥ 1.5 (IEX cumulative volume against the prior 10 Runs' cumulative
   IEX volume at the same time; never IEX against SIP) and relative strength versus SPY since the open ≥ 0.3 points in
   the direction of the break. Freshness 180 s, average dollar volume ≥ $20M, and the 120-minute horizon plus a
   30-minute close buffer must fit before the session close from the broker calendar (early closes respected). One

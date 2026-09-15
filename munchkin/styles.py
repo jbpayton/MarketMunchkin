@@ -26,7 +26,7 @@ STYLES: dict[str, dict[str, Any]] = {
         "watch": {"min_gap_seconds": 180, "position_move_pct": 4.0},
         "reasoning": "high",
         "summary": ["stock only, no options", "$50–75 probes, 25% per position, 4 positions max", "confirmed catalysts only (speculative and unexplained moves are blocked)",
-                    "stops 1.5–2 ATR, horizons of days to weeks", "daily loss breaker at −8%", "sessions 3 minutes apart, reasoning high"],
+                    "stops 1.5–2 ATR, horizons of days to weeks", "daily loss breaker at −8%", "Runs 3 minutes apart, reasoning high"],
         "brief": ("STYLE: DEFENSIVE. Long-only stock swings with multi-day horizons. Options are disabled. Only CONFIRMED catalysts "
                   "qualify; speculative or unexplained moves are not entries. Probes $50–75, structural stops 1.5–2 ATR, never chase. "
                   "Prefer quality names above their 200-day average. Being flat is fine here; being reckless is not."),
@@ -41,7 +41,7 @@ STYLES: dict[str, dict[str, Any]] = {
         "watch": {"min_gap_seconds": 60, "position_move_pct": 3.0},
         "reasoning": "medium",
         "summary": ["stock, bought calls/puts and debit verticals", "$50–100 probes, 40% per position, 5 positions max", "speculative catalysts at half size, unexplained moves at 0.35",
-                    "structural stops; options 7–21 DTE, out by 3 DTE", "daily loss breaker at −15%", "continuous sessions 60 s apart, reasoning medium"],
+                    "structural stops; options 7–21 DTE, out by 3 DTE", "daily loss breaker at −15%", "continuous runs 60 s apart, reasoning medium"],
         "brief": ("STYLE: BALANCED. Stock for slower theses, defined-risk options (bought calls/puts, debit verticals) for fast setups. "
                   "Probes $50–100. Speculative catalysts at half size; unexplained moves rarely. Structural stops; options 7–21 DTE, "
                   "stop at 50% of premium, first target +80–100%."),
@@ -57,7 +57,7 @@ STYLES: dict[str, dict[str, Any]] = {
         "reasoning": "medium",
         "summary": ["bought calls and puts preferred for fast setups; verticals when IV is rich", "$100–150 probes, 50% per position, 6 positions max",
                     "speculative catalysts at 0.75, unexplained moves at 0.5", "tighter stops, faster exits (+60–80% on premium)", "daily loss breaker at −20%",
-                    "continuous sessions, events preempt, reasoning medium"],
+                    "continuous runs, events preempt, reasoning medium"],
         "brief": ("STYLE: AGGRESSIVE. Options are the primary instrument for fast setups: bought calls and puts (single contracts) sized "
                   "$100–150, verticals only when IV is rich. Take the probe NOW when a thesis is decent; do not park it as an arm below the market. Faster exits: first target +60–80% "
                   "on premium, cut at 50%. Stock only for slower theses or names without a liquid chain. Still cash-only, still no writing."),

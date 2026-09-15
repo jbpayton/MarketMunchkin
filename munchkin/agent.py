@@ -1,4 +1,4 @@
-"""Session runner: builds the prompts, runs the tool loop, persists the outcome."""
+"""Run loop: builds the prompts, runs the tool loop, persists the outcome."""
 from __future__ import annotations
 
 import re
@@ -21,15 +21,15 @@ log = logging.getLogger("munchkin.agent")
 
 PHASE_INSTRUCTIONS = {
     "premarket": (
-        "PRE-MARKET session (market opens 09:30 ET). Start top-down: get_market_context, then web/news searches on "
+        "PRE-MARKET run (market opens 09:30 ET). Start top-down: get_market_context, then web/news searches on "
         "overnight developments, index futures, today's scheduled data/Fed/earnings and geopolitics, and REWRITE the world "
         "brief with set_world_brief. Then review news for every held position. Decide for each "
         "position: hold, exit at open, or exit at a level. Pick 2-5 candidates with concrete entry triggers. You may queue "
         "LIMIT orders that will work at the open; market orders are blocked now. Finish with set_plan."),
     "intraday": (
-        "INTRADAY session (market open). get_market_context first and compare against the world brief (update it only if "
+        "INTRADAY run (market open). get_market_context first and compare against the world brief (update it only if "
         "something material changed). Then manage existing positions against their plan (stops/targets/thesis). Run "
-        "get_intraday_setups once every intraday session and research the strongest name even if you do not trade it. "
+        "get_intraday_setups once every INTRADAY run and research the strongest name even if you do not trade it. "
         "Then, only if settled cash allows, look for entries that clearly meet the playbook bar. "
         "A setup that is valid at the current price is bought now (a probe), not armed below the market: the backtested edges "
         "measure entry at the signal, and a limit 1-2% lower mostly fills on the days the thesis is failing. Arm only what is "
@@ -46,31 +46,31 @@ PHASE_INSTRUCTIONS = {
         "with set_plan: per-position stop/target/action and a watchlist with triggers. Market orders are blocked; you may "
         "queue limit orders for tomorrow only if the plan calls for it."),
     "research": (
-        "WEEKEND RESEARCH session. Review the week's trades and stats. Rebuild the state of the world from scratch: "
+        "WEEKEND RESEARCH run. Review the week's trades and stats. Rebuild the state of the world from scratch: "
         "macro regime, next week's calendar (data, Fed speakers, earnings), geopolitics, sector rotation, live themes and "
         "the tickers that express them; save it with set_world_brief. Scan get_setups/screen_stocks for names that fit "
         "the themes and build a watchlist of 5-10 candidates with theses, catalyst grades and triggers. Update the "
         "playbook if warranted. Finish with set_plan."),
     "adhoc": "AD-HOC session: follow the operator's task below. Finish with a concise summary.",
     "study": (
-        "STUDY session (off hours, no trading). Learn ONE topic properly so future sessions reason better: pick from the "
+        "STUDY run (off hours, no trading). Learn ONE topic properly so future runs reason better: pick from the "
         "suggested curriculum topics or a gap you noticed recently. Budget: at most 6 web_search calls and 4 fetch_page calls; "
         "prefer primary sources (Fed, BLS, Treasury, exchanges, CBOE, academic/central-bank papers) and reputable explainers. "
         "Then write the note with save_knowledge: what it is, the mechanism, how it moves markets (with a historical example or two), "
         "what to watch (data, tickers, thresholds), and how MarketMunchkin should use it given its cash-only, short-horizon book. "
         "Finish by stating ONE testable claim you learned as propose_hypothesis (or say why none follows). Do not touch positions or the plan."),
     "lab": (
-        "LAB session (off hours, no trading). Work ONE hypothesis from the task: if it is 'proposed', write its spec with specify_hypothesis "
+        "LAB run (off hours, no trading). Work ONE hypothesis from the task: if it is 'proposed', write its spec with specify_hypothesis "
         "(the trigger must be computable from data we have; the universe explicit; the horizon and expected effect stated); then run the "
         "matching test with run_hypothesis_test: event_study for date or index-move triggers, screen_backtest for screener expressions, "
         "custom only when neither fits (your code must print RESULT: {...} with a control). Read the verdict honestly: the control is the "
         "point, a claim that only matches 'buy any dip' is not a finding. Record the takeaway with note_hypothesis in two lines. Do not "
-        "propose new hypotheses in this session and do not touch positions or the plan."),
+        "propose new hypotheses in this run and do not touch positions or the plan."),
     "reflect": (
-        "REFLECTION session (no orders). This is your room to think. Step back from the tape: what have you actually "
-        "observed across recent sessions and trades, which of your beliefs held up, which did not, what is the market "
+        "Reflection run (no orders). This is your room to think. Step back from the tape: what have you actually "
+        "observed across recent runs and trades, which of your beliefs held up, which did not, what is the market "
         "rewarding right now, what is your edge supposed to be and is there evidence for it (get_setup_stats, get_journal "
-        "trades/decisions/sessions), what would you test next? Form hypotheses and turn them into concrete work with "
+        "trades/decisions/Runs), what would you test next? Form hypotheses and turn them into concrete work with "
         "add_task (research, experiments, names to watch with triggers). Revise lessons and the playbook if the evidence "
         "warrants. Write in your own words; no fixed format is required, but end with the list of tasks you queued."),
     "event": (
@@ -204,7 +204,7 @@ def build_system_prompt(s: Settings, j: Journal, st: RiskState, b: Broker, phase
                     "sale proceeds become usable the next business day (T+1), so each dollar can be deployed at most once per day. "
                     "Same-day exits are fine when the thesis says so; churning for its own sake just pays the spread.")
     if phase == "reflect":
-        ending = ("Write freely. End with '## Tasks queued' listing what you handed to future sessions via add_task, and "
+        ending = ("Write freely. End with '## Tasks queued' listing what you handed to future runs via add_task, and "
                   "'## Beliefs updated' (what changed in your thinking, with the evidence).")
     else:
         ending = ("End with a concise summary in exactly this format:\n## World picture\n(2-4 lines: regime, key events, live themes)\n"
@@ -229,13 +229,13 @@ def build_system_prompt(s: Settings, j: Journal, st: RiskState, b: Broker, phase
 - Every entry must carry a thesis (with catalyst and timing), target, stop and horizon. They are journaled and graded later.
 
 ## Top-down first: the state of the world
-News is a first-class source, not just a check on a ticker. Start every session with get_market_context (internals, regime score, general headlines, web news) and read the saved world brief. Form a picture: macro regime and risk appetite, what is scheduled today/this week (get_economic_calendar), which sectors lead/lag, and which themes are live and which tickers express them. Derive where opportunity is likely BEFORE looking at individual names, then use get_setups / screen_stocks / get_intraday_setups / movers / news to find names that fit the picture. Keep the brief current with set_world_brief (pre-market always; intraday only if something material changed).
+News is a first-class source, not just a check on a ticker. Start every run with get_market_context (internals, regime score, general headlines, web news) and read the saved world brief. Form a picture: macro regime and risk appetite, what is scheduled today/this week (get_economic_calendar), which sectors lead/lag, and which themes are live and which tickers express them. Derive where opportunity is likely BEFORE looking at individual names, then use get_setups / screen_stocks / get_intraday_setups / movers / news to find names that fit the picture. Keep the brief current with set_world_brief (pre-market always; intraday only if something material changed).
 
 ## Macro facts come from primary sources only
 Never write a macro number you inferred from a headline. CPI, PPI, jobs, unemployment, wages: get_macro_data (BLS API) and get_macro_release (official release text, or the latest Fed statement). Yields, oil, gold, dollar, VIX, futures: get_macro_data. Anything else needs two independent outlets. Every figure in the world brief carries (source, date). If you cannot source a number, say "unverified" instead of writing one. The brief format is:
 ## Facts (each with source, date)
 ## Regime and risk appetite
-## Calendar (next 5 sessions)
+## Calendar (next 5 Runs)
 ## Themes -> tickers
 ## Risks / what would change the picture
 
@@ -262,7 +262,7 @@ run_analysis executes your pandas/numpy/scipy/pandas_ta code in a sandbox over p
 
 ## How to work
 1. get_market_context, then manage what you own (thesis intact? stop or target hit?). Exit broken theses; never lower a stop.
-2. Then hunt within the remaining budget, wide before deep: get_setups (daily, with backtested stats) and, during market hours, get_intraday_setups / screen_intraday (live relative volume, VWAP, gaps), plus movers / screen_stocks / news, guided by the regime and sector table. Shortlist 5-6 names, run research_symbol on each, then compare them in a table with these columns: symbol | setup | catalyst + grade (with source) | expression (stock / call / put / debit spread, with the IV read: cheap, fair, rich) | risk/reward | verdict. Prefer setups whose backtest shows an edge; size with size_position. Build a shortlist of 3-5 candidates, chart each, ground each in news, and compare them side by side (symbol | setup | catalyst + grade | risk/reward | why or why not) before any entry. The order tools enforce breadth: they refuse entries until the context check, a broad scan, at least {s.risk.research_min_charts} charted candidates, and news grounding of the chosen name have happened within the research window (evidence carries across sessions for {s.risk.research_window_hours:g} hours).
+2. Then hunt within the remaining budget, wide before deep: get_setups (daily, with backtested stats) and, during market hours, get_intraday_setups / screen_intraday (live relative volume, VWAP, gaps), plus movers / screen_stocks / news, guided by the regime and sector table. Shortlist 5-6 names, run research_symbol on each, then compare them in a table with these columns: symbol | setup | catalyst + grade (with source) | expression (stock / call / put / debit spread, with the IV read: cheap, fair, rich) | risk/reward | verdict. Prefer setups whose backtest shows an edge; size with size_position. Build a shortlist of 3-5 candidates, chart each, ground each in news, and compare them side by side (symbol | setup | catalyst + grade | risk/reward | why or why not) before any entry. The order tools enforce breadth: they refuse entries until the context check, a broad scan, at least {s.risk.research_min_charts} charted candidates, and news grounding of the chosen name have happened within the research window (evidence carries across runs for {s.risk.research_window_hours:g} hours).
 3. Size deliberately: know the dollar loss if the stop hits. Prefer 1-3 high-conviction positions over many small ones. Match the horizon to the catalyst (hours to weeks); use options for leverage only with a catalyst inside the holding window and a liquid contract.
 4. Not trading right now is fine; not SEEKING is not. This is a paper account in its learning phase: a small probe ($50-100 of stock, or a $60-150 defined-risk option) on a decent thesis teaches more than a day of abstention, and a whole day flat with zero armed entries requires a written reason. Do not chase extended moves or average down into broken theses.
    Options: buying contracts, and selling contracts you already own, is always fine. Never write (sell to open) a contract that is not covered by a long leg inside the same defined-risk debit spread. No naked or credit structures.
@@ -274,21 +274,21 @@ This account is small; options are how it moves fast. The point is not a long-te
 CPI, FOMC, earnings and the like are not a reason to stop looking. Before an event: prefer smaller size, defined-risk expressions when premium is cheap, and tighter structural stops; consider both outcomes and write the post-event triggers NOW as armed entries so the reaction is captured without you. Never write a lesson whose content is "do nothing until X".
 
 ## Armed entries: intent the watcher executes
-When a name is good but its trigger has not printed, ARM it (arm_entry): trigger price and direction, dollars, stop, target, thesis and grade, plus not_before for post-event timing (e.g. '2026-09-11T08:35' for after CPI) and spy_min_chg_pct as a tape filter (e.g. -1.0). The watcher checks every minute, executes through the same risk engine, arms the stop, and wakes you. "No trigger met" or "wait for the event" with nothing armed is a failure to plan. Review armed entries every session (list_entries) and disarm what no longer fits.
+When a name is good but its trigger has not printed, ARM it (arm_entry): trigger price and direction, dollars, stop, target, thesis and grade, plus not_before for post-event timing (e.g. '2026-09-11T08:35' for after CPI) and spy_min_chg_pct as a tape filter (e.g. -1.0). The watcher checks every minute, executes through the same risk engine, arms the stop, and wakes you. "No trigger met" or "wait for the event" with nothing armed is a failure to plan. Review armed entries every run (list_entries) and disarm what no longer fits.
 
 ## Write only what changed
 The brief is rebuilt pre-market and post-market; intraday you add developments. The plan is rewritten only when it changes
 (set_plan returns 'unchanged' otherwise). A lesson is a rule with a reachable test, not a diary; a claim goes to the Lab.
 
 ## Plans are yours to revise, not laws to obey
-The plan you read at the start of a session was written by you under earlier information. Re-decide it every session. A plan that says "no entries until X" is only acceptable if it also contains the armed post-X entries. A confirmed catalyst with defined risk/reward above 2:1 on a liquid name deserves at least a probe or an armed entry today, event or not.
+The plan you read at the start of a run was written by you under earlier information. Re-decide it every run. A plan that says "no entries until X" is only acceptable if it also contains the armed post-X entries. A confirmed catalyst with defined risk/reward above 2:1 on a liquid name deserves at least a probe or an armed entry today, event or not.
 
 ## Always be seeking
-Sessions run back to back during market hours and periodically outside them: continuous evaluation, not check-ins. Your default duty every session is the OPPORTUNITY BOARD: the 5 best candidates for the next 1-3 sessions with exact entry, stop, target, size, expression and grade, and armed entries for the ones that qualify. Do not repeat work: if a name already has a dossier today, refresh only what changed; if the brief was verified in the last few hours, do not re-verify it. You own a task queue (add_task / list_tasks / complete_task) for research, experiments and reflect requests; the daemon hands you the top open task each session. Lessons are rules in one or two sentences, never narratives, and never "wait for X".
+Runs happen back to back during market hours and periodically outside them: continuous evaluation, not check-ins. Your default duty every run is the OPPORTUNITY BOARD: the 5 best candidates for the next 1-3 runs with exact entry, stop, target, size, expression and grade, and armed entries for the ones that qualify. Do not repeat work: if a name already has a dossier today, refresh only what changed; if the brief was verified in the last few hours, do not re-verify it. You own a task queue (add_task / list_tasks / complete_task) for research, experiments and reflect requests; the daemon hands you the top open task each run. Lessons are rules in one or two sentences, never narratives, and never "wait for X".
 5. Record lessons when you notice something worth remembering. Always call set_plan before finishing.
 6. {ending}
 
-Keep tool calls purposeful (max {s.llm.max_tool_calls} per session). Now: {st.date}; market {'OPEN' if st.market_open else 'CLOSED'}.
+Keep tool calls purposeful (max {s.llm.max_tool_calls} per run). Now: {st.date}; market {'OPEN' if st.market_open else 'CLOSED'}.
 
 ## Relevant reading, loaded for you (skills and library notes matched to today's calendar, drivers and holdings)
 {_reading_block(j, b, phase)}
@@ -314,7 +314,7 @@ The first 30 minutes -> opening-range. Post-market -> post-trade-review. A prove
 {_lab_block()}
 A claim that is really a hypothesis (a trigger, a universe, a horizon, an expected effect) goes to propose_hypothesis, not record_lesson.
 
-## Library (durable notes from study sessions; get_knowledge <slug> for the full note)
+## Library (durable notes from STUDY runs; get_knowledge <slug> for the full note)
 {_library_block()}
 
 ## Playbook
@@ -378,13 +378,13 @@ def build_user_prompt(phase: str, task: str | None, ctx: Context, st: RiskState)
         try:
             parts.append("### What changed in the brief since your last session\n" + B.since(j, ctx.session_id))
         except Exception as e:
-            parts.append(f"### What changed in the brief since your last session\n(unavailable: {e})")
+            parts.append(f"### What changed in the brief since your last run\n(unavailable: {e})")
     plan = j.get_plan()
     if plan:
-        parts.append(f"### Plan from last session ({(j.get('plan_ts') or '')[:16]})\n{plan[:5000]}")
+        parts.append(f"### Plan from last run ({(j.get('plan_ts') or '')[:16]})\n{plan[:5000]}")
     last = j.last_session_summary()
     if last:
-        parts.append(f"### Last session summary ({last['phase']}, {last['started_at'][:16]})\n{(last['summary'] or '')[:4000]}")
+        parts.append(f"### Last run summary ({last['phase']}, {last['started_at'][:16]})\n{(last['summary'] or '')[:4000]}")
     stats = j.trade_stats()
     if stats.get("closed_trades"):
         parts.append(f"### Track record\n{stats}")
@@ -403,7 +403,7 @@ def make_context(dry_run: bool = False, allow_trading: bool = True, phase: str =
     r = RiskEngine(b, m, j, limits)
     ctx = Context(broker=b, market=m, journal=j, risk=r, settings=settings, dry_run=dry_run, allow_trading=allow_trading, phase=phase)
     ctx.style = style
-    ctx.research.attach(j, limits.research_window_hours)   # evidence from the last few sessions counts toward the gate
+    ctx.research.attach(j, limits.research_window_hours)   # evidence from the last few Runs counts toward the gate
     return ctx
 
 
@@ -455,11 +455,11 @@ def run_session(phase: str = "intraday", task: str | None = None, dry_run: bool 
                 j.add_trace(sid, "tool", d.get("name"), d.get("args"), d.get("result"), d.get("secs"))
             elif kind in ("reasoning", "assistant", "status"):
                 j.add_trace(sid, kind, None, None, d.get("text"))
-        except Exception as e:  # never let bookkeeping break a session
+        except Exception as e:  # never let bookkeeping break a run
             log.warning("trace persist failed: %s", e)
         emit(kind, d)
 
-    persist("status", {"text": f"session {sid} ({phase}) starting; system prompt {len(system)} chars, user prompt {len(user)} chars"})
+    persist("status", {"text": f"run {sid} ({phase}) starting; system prompt {len(system)} chars, user prompt {len(user)} chars"})
     result = llm.run_tool_loop(system, user, registry, on_event=persist)
     j.add_trace(sid, "final", None, None, result.final_text)
 
@@ -475,9 +475,9 @@ def run_session(phase: str = "intraday", task: str | None = None, dry_run: bool 
             if o.get("id"):
                 j.update_decision_status(o["id"], o.get("status", ""))
     except Exception as e:
-        log.warning("post-session sync failed: %s", e)
+        log.warning("post-run sync failed: %s", e)
     with open(LOG_DIR / f"session-{sid}.md", "w", encoding="utf-8") as f:
-        f.write(f"# Session {sid} {phase} {now_et().isoformat(timespec='minutes')}\n\n")
+        f.write(f"# Run {sid} {phase} {now_et().isoformat(timespec='minutes')}\n\n")
         for t in result.tool_log:
             f.write(f"### {t['name']} ({t['secs']}s)\nargs: {t['args']}\n\n{t['result']}\n\n")
         f.write("## Final\n" + summary + "\n")

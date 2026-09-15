@@ -11,7 +11,7 @@
   <b>Local LLM</b> · <b>Alpaca, paper or live</b> · <b>Cash only</b> · <b>Free data sources</b> · <b>Every decision traced</b> · <b>MIT licensed</b>
 </p>
 
-![Overview: equity curve with axes, state-of-the-world dials, positions with resting stops, armed entries, the last session's reasoning as a timeline](docs/screenshots/overview.png)
+![Overview: equity curve with axes, state-of-the-world dials, positions with resting stops, armed entries, the last run's reasoning as a timeline](docs/screenshots/overview.png)
 
 ## What it is
 
@@ -74,13 +74,13 @@ These hold in every style and cannot be changed from the dashboard, the prompt, 
 - **No option is held into expiration.** Wake at 1 DTE, forced close at 14:30 ET on expiry day, do-not-exercise filed as a backstop.
 - **Position caps, the daily-loss breaker and the kill switch apply everywhere.**
 - **Every entry needs a dossier, a graded and sourced catalyst, a stop and a target.** The research gate refuses
-  to commit capital until the session has read the market context, run a broad scan, charted several candidates
+  to commit capital until the run has read the market context, run a broad scan, charted several candidates
   and grounded the name in news.
 
 ## A brain that reads as much as it writes
 
 The world brief is a versioned document, not an essay rewritten every session: full rebuilds happen pre-market, in
-research and post-market; intraday and event sessions append sourced developments, and every session is shown what
+research and post-market; intraday and EVENT runs append sourced developments, and every run is shown what
 changed since its previous one. Every entry and armed entry declares what it **depends on** (a driver, a theme, a
 sector) and what **invalidates** it; the watcher checks the cross-asset dials hourly and wakes the agent for exactly the
 positions whose dependency flipped, and watches the news for each declared theme, not just each held ticker. The one
@@ -92,14 +92,14 @@ into a sector the tape has been punishing is asked to say why.
 
 Caps per position were never enough: the book could end fully invested in slow, low-beta names under an aggressive
 style with no cash left for the agility the style is about. The risk engine now also enforces a **portfolio policy**
-per style, and every session sees the **book state** as data (cash versus reserve, deployable cash, each position's
+per style, and every run sees the **book state** as data (cash versus reserve, deployable cash, each position's
 sector, beta, horizon, age and progress, concentration and style-fit flags, and what the state calls for):
 
 | | Defensive | Balanced | Aggressive |
 |---|---|---|---|
 | settled-cash reserve | 30% | 25% | 20% |
 | sector cap | 50% | 50% | 50% |
-| capital in slow theses (> 5 sessions) | no cap | 60% | 40% |
+| capital in slow theses (> 5 Runs) | no cap | 60% | 40% |
 | return-on-time bar for stock entries | none | 2% | 3% |
 | first entry into a name (probe) | $50–75 | $50–100 | $100–150 |
 
@@ -112,7 +112,7 @@ raises an event when a position's journaled horizon elapses, and the agent must 
 ## Trading styles
 
 Three operator-selected styles change the risk envelope, the instruments, the cadence and the agent's brief.
-The active style applies from the next session.
+The active style applies from the next run.
 
 | | Defensive | Balanced (default) | Aggressive |
 |---|---|---|---|
@@ -131,32 +131,32 @@ The active style applies from the next session.
 - **Pre-market (08:45 ET).** Top-down: market context, overnight developments, today's data and Fed calendar,
   earnings, geopolitics. The agent rewrites its world brief with sources, reviews news on every holding, and
   sets a plan with concrete triggers.
-- **Market hours.** Continuous sessions, one starting a minute after the last one ends. A full opportunity board
-  (rank, research, arm) runs at most every 30 minutes; the sessions in between get a monitor duty: check every held
+- **Market hours.** Continuous runs, one starting a minute after the last one ends. A full opportunity board
+  (rank, research, arm) runs at most every 30 minutes; the runs in between get a monitor duty: check every held
   and armed name against the tape and news, change something only if a thesis changed. A watcher polls every
-  60 seconds and preempts with an **event session** when a resting stop fills, a target trades, a holding or the
+  60 seconds and preempts with an **EVENT run** when a resting stop fills, a target trades, a holding or the
   index moves, headlines land on a position, or an option nears expiry. Operator requests from Telegram jump the queue.
 - **Armed entries.** For genuinely conditional entries the agent arms instructions: "UBER call spread, $120, above
   73.50, not before 08:35, only if SPY is not down more than 1%". The watcher runs on its own thread, checks every
-  60 seconds regardless of what a session is doing, executes within a minute of the trigger, and resolves option
+  60 seconds regardless of what a run is doing, executes within a minute of the trigger, and resolves option
   contracts at fire time. Triggers must sit within about one daily ATR of the price (the tool reports the distance
   and rough odds of a touch); a setup that is valid at the current price is bought at the signal, not parked below
   it. Every arm that expires or is disarmed leaves an ARM REVIEW note (touched or not, closest approach, drift) that
-  the post-market session reads first.
+  the POST-MARKET run reads first.
 - **Post-market (16:15 ET).** Grades the day's decisions against their theses, records lessons, revises the
   playbook if a rule should change, writes tomorrow's plan.
 - **Off hours.** Works its own task queue (research it assigned itself), reflects when the queue is empty, and
-  after 20:00 runs at most two bounded **study sessions** a night: one curriculum topic (inflation prints, the
+  after 20:00 runs at most two bounded **STUDY runs** a night: one curriculum topic (inflation prints, the
   Fed's reaction function, credit spreads, options market structure, event-day patterns, cash-account
   mechanics, and twenty more), six searches and four page fetches at most, written up into a library note that
-  every future session can read.
+  every future run can read.
 
 ## Under the hood
 
 - **Research gate and catalyst grades.** `confirmed` (primary source or several reputable outlets) sizes at
   1.0, `speculative` at 0.5, `none` (an unexplained move) at 0.35. Grades multiply the position cap. Evidence
   (charts, news, dossiers, scans) is stamped and persisted, and counts for `research_window_hours` (3h) across
-  sessions, so a session six minutes after the last one does not have to redo the homework to re-arm an idea.
+  runs, so a run six minutes after the last one does not have to redo the homework to re-arm an idea.
 - **State of the world.** A transparent regime score (SPY trend, breadth, VIX level and term structure), sector
   table, macro tape from yfinance, BLS prints from the BLS API, Fed releases from the Fed's RSS, twelve
   cross-asset dials, and the agent's own sourced brief. The prompt tells it to let these direct where it looks.
@@ -170,9 +170,9 @@ The active style applies from the next session.
 - **Sandboxed analysis.** `run_analysis` (and skill scripts) let the model run pandas / numpy / scipy / pandas_ta code that runs
   in a separate `python -I -S` interpreter with no credentials, CPU and memory limits, a timeout and an AST
   allowlist.
-- **Journal.** SQLite memory: sessions with full traces, decisions and rejections, fills, round-trip trades,
+- **Journal.** SQLite memory: runs with full traces, decisions and rejections, fills, round-trip trades,
   lessons (capped in length), notes, tasks, the plan, the playbook, exits, equity, breadth and IV history.
-- **Style switching.** Flipping the style writes one setting. The next session and the watcher pick up the new
+- **Style switching.** Flipping the style writes one setting. The next run and the watcher pick up the new
   caps, instrument flags, breaker and cadence at once; open positions are never touched, and armed entries are
   checked against the new envelope when they fire rather than resized.
 - **Broker outages.** When Alpaca's clock or data backend fails (it has, with the status page green), the clock is
@@ -208,8 +208,8 @@ active style. `munchkin experiment --enable | --tick | --report | --signal N`. D
 ## The Lab (phase one)
 
 Claims about the market get a lifecycle instead of a diary entry. A hypothesis is proposed by you (Brain page, or
-`/hypo` on Telegram) or by the agent (study and post-market sessions), specified as a trigger, a universe, a horizon
-and an expected effect, and tested at night in lab sessions against history **with a control**: an event study
+`/hypo` on Telegram) or by the agent (study and POST-MARKET runs), specified as a trigger, a universe, a horizon
+and an expected effect, and tested at night in LAB runs against history **with a control**: an event study
 compares the claimed events with every day that met the same mechanical condition regardless of the story; a screen
 backtest compares signal days with the unconditional baseline. Gates (`[lab]` in `munchkin.toml`): sample size, edge
 over the control, hit-rate edge, agreement between halves of the window, bounded worst case. Rejected claims stay in
@@ -245,12 +245,12 @@ Alerts to your phone and a command channel, without exposing the dashboard to th
 3. Run the poller as a service: `cp scripts/munchkin-telegram.service ~/.config/systemd/user/ && systemctl --user enable --now munchkin-telegram`.
 
 What it pushes (each kind can be toggled on the Config tab or with `/notify KIND on|off`): fills, armed entries
-firing and stops re-arming; session failures; broker or data-feed degradation and recovery; the pre-market plan and
+firing and stops re-arming; run failures; broker or data-feed degradation and recovery; the pre-market plan and
 post-market review. `/mute 60` silences alerts for an hour; replies to your own requests always come through.
 
 Commands: `/status`, `/positions`, `/arms`, `/last`, `/tasks`, `/halt` and `/resume` (each asks you to confirm),
 `/style defensive|balanced|aggressive`, `/disarm SYMBOL`, `/notify`. Anything else you type is queued as an
-operator request; the next session (within a minute during market hours, within a minute or so off hours) answers
+operator request; the next run (within a minute during market hours, within a minute or so off hours) answers
 it and the reply lands in the chat.
 
 ## Quick start
@@ -264,7 +264,7 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 cp .env.example .env && chmod 600 .env   # Alpaca paper keys, model server, SearXNG URL
 .venv/bin/munchkin test-llm              # connectivity + tool calling + detected context window
 .venv/bin/munchkin status                # account, risk state, positions, plan
-.venv/bin/munchkin run --phase intraday --dry-run   # a full session with orders validated but not sent
+.venv/bin/munchkin run --phase intraday --dry-run   # a full run with orders validated but not sent
 ```
 
 Run the daemon and the dashboard as user services:
@@ -285,7 +285,7 @@ munchkin run --phase premarket|intraday|postmarket|research|reflect|study [--dry
 munchkin chat "Is NVDA a buy into earnings?"      # read-only Q&A with every research tool
 munchkin watch                                     # one watcher tick
 munchkin exits [SYMBOL --stop X --target Y]        # show or override exit levels and resting stops
-munchkin journal trades|decisions|lessons|sessions|notes
+munchkin journal trades|decisions|lessons|Runs|notes
 munchkin plan | munchkin playbook
 munchkin screener refresh | backtest --years 3 | earnings | regime | intraday --setups
 munchkin screener query "rsi14 < 30 and avg_dollar_vol20_m > 50" --sort rsi14 --asc
@@ -313,16 +313,16 @@ munchkin baseline --reset                          # re-anchor the virtual accou
 
 | module | what it does |
 |---|---|
-| `agent.py` | prompts per phase, the system prompt (rules, style, dials, skills, library, playbook, lessons), session runner |
+| `agent.py` | prompts per phase, the system prompt (rules, style, dials, skills, library, playbook, lessons), run loop |
 | `tools.py` | the ~55 tools the model sees: account, quotes, charts, screener, options, news, macro, research, orders, exits, arms, journal, skills, analysis |
 | `risk.py`, `styles.py` | the risk engine and the three style envelopes over the fixed rules |
 | `llm.py` | OpenAI-compatible tool loop, context-window detection, compaction |
-| `cli.py` | the `munchkin` CLI: daemon loop (sessions, watcher, duties, study), web, telegram, screener, journal |
+| `cli.py` | the `munchkin` CLI: daemon loop (runs, watcher, duties, study), web, telegram, screener, journal |
 | `watch.py`, `entries.py`, `exits.py`, `optentry.py` | the watcher, armed entries, resting stops and targets, option contract resolution and spreads |
 | `market.py`, `broker.py`, `macro.py`, `providers.py`, `search.py` | Alpaca data and trading, yfinance/BLS/Fed, Tavily/Finnhub/StockTwits, SearXNG, the feed breaker |
 | `screener.py`, `analytics.py`, `indicators.py` | the universe table, regime, breadth, sectors, setups and backtests |
 | `research.py`, `knowledge.py`, `skills.py` | the research gate, the study library, the skills store |
-| `journal.py` | SQLite memory: sessions, traces, decisions, fills, trades, lessons, tasks, exits, equity, history |
+| `journal.py` | SQLite memory: runs, traces, decisions, fills, trades, lessons, tasks, exits, equity, history |
 | `web.py`, `ui/` | the dashboard API and the single-page app |
 | `telegram.py` | alerts and the command channel |
 | `sandbox/` | the interpreter that runs model-written analysis and skill scripts |

@@ -72,13 +72,13 @@ def run(phase: str = typer.Option("intraday", help="premarket | intraday | event
         no_trade: bool = typer.Option(False, help="disable order tools entirely"),
         refresh: bool = typer.Option(False, help="force screener refresh first"),
         quiet: bool = typer.Option(False), verbose: bool = typer.Option(False)) -> None:
-    """Run one agent session."""
+    """Start one agent run."""
     _setup_logging(verbose)
     from .agent import run_session
     t0 = time.time()
     res = run_session(phase=phase, task=task, dry_run=dry_run, allow_trading=not no_trade,
                       on_event=_printer(quiet), refresh_screener=True if refresh else None)
-    console.print(Panel(res.final_text, title=f"session summary ({phase})", border_style="magenta"))
+    console.print(Panel(res.final_text, title=f"run summary ({phase})", border_style="magenta"))
     console.print(f"[dim]{res.tool_calls} tool calls, {res.steps} steps, prompt {res.prompt_tokens} tok (last), "
                   f"completion {res.completion_tokens} tok (reasoning {res.reasoning_tokens}), {time.time()-t0:.0f}s[/dim]")
 
@@ -95,7 +95,7 @@ def chat(question: str, trade: bool = typer.Option(False, help="allow order tool
 
 @app.command()
 def daemon(once: bool = typer.Option(False, help="one loop iteration and exit")) -> None:
-    """Scheduler + watcher: fixed pre/post-market sessions, a 30-min intraday baseline, and event-driven wakes."""
+    """Scheduler + watcher: fixed pre/POST-MARKET runs, a 30-min intraday baseline, and event-driven wakes."""
     _setup_logging(False)
     from .agent import make_context, run_session
     from .exits import ExitManager
@@ -109,7 +109,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
     watcher = Watcher(ctx.broker, ctx.market, j, exits, W, risk=ctx.risk)
     n_orphans = j.close_orphans()
     if n_orphans:
-        j.add_event("error", f"closed {n_orphans} orphaned session(s) left by a previous daemon stop")
+        j.add_event("error", f"closed {n_orphans} orphaned run(s) left by a previous daemon stop")
     stop_requested = {"flag": False}
     degraded = {"flag": False}
     import queue
@@ -200,9 +200,9 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                     return
                 time.sleep(1)
 
-    def _on_term(signum, frame):  # let the current session finish, then exit the loop
+    def _on_term(signum, frame):  # let the current run finish, then exit the loop
         stop_requested["flag"] = True
-        console.print("[yellow]stop requested; finishing the current session[/yellow]")
+        console.print("[yellow]stop requested; finishing the current run[/yellow]")
     signal.signal(signal.SIGTERM, _on_term)
     signal.signal(signal.SIGINT, _on_term)
     failures = {"n": 0}
@@ -259,7 +259,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         return None
 
     def _rotation_task() -> str:
-        """State-aware duty for a session with no event and an empty queue. The opportunity board is the default;
+        """State-aware duty for a run with no event and an empty queue. The opportunity board is the default;
         housekeeping items run only when they are actually stale."""
         now = now_et()
         def age_h(key: str) -> float:
@@ -270,7 +270,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                 return (now - dt.datetime.fromisoformat(v)).total_seconds() / 3600
             except Exception:
                 return 1e9
-        board = ("DUTY: OPPORTUNITY BOARD. Cash is a position and deploying is not the goal. Rank the best candidates for the next 1-3 sessions "
+        board = ("DUTY: OPPORTUNITY BOARD. Cash is a position and deploying is not the goal. Rank the best candidates for the next 1-3 Runs "
                  "that clear the style's return-on-time bar (get_book_state shows deployable cash; the risk engine refuses entries that breach the "
                  "reserve, the sector cap, the slow-thesis cap, or the expected-move bar). For each: exact entry (price or trigger), stop, target, "
                  "size (a probe, then adds on evidence), expression (stock / call / put / debit spread with the IV read) and catalyst grade with source. "
@@ -348,11 +348,11 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
     def _run(phase: str, task: str | None = None, task_id: int | None = None) -> None:
         nonlocal last_session_end, last_intraday
         console.print(f"[bold]{now_et():%H:%M} running {phase}{' (' + task[:80] + ')' if task else ''}[/bold]")
-        j.add_event("session", f"{phase} session started" + (f": {task[:300]}" if task else ""))
+        j.add_event("session", f"{phase} run started" + (f": {task[:300]}" if task else ""))
         try:
             res = run_session(phase=phase, task=task, on_event=_printer(False))
             console.print(Panel(res.final_text, title=f"{phase} summary", border_style="magenta"))
-            j.add_event("session", f"{phase} session finished ({res.tool_calls} tool calls)")
+            j.add_event("session", f"{phase} run finished ({res.tool_calls} tool calls)")
             failures["n"] = 0
             if task_id is not None:
                 chat = j.get(f"telegram:task:{task_id}")
@@ -362,12 +362,12 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
             if phase in ("premarket", "postmarket"):
                 TG.notify(f"{phase.capitalize()} summary\n{res.final_text[:3500]}", kind="sessions")
         except Exception as e:
-            logging.exception("session failed")
-            console.print(f"[red]session failed: {e}[/red]")
-            j.add_event("error", f"{phase} session failed: {str(e)[:300]}")
+            logging.exception("run failed")
+            console.print(f"[red]run failed: {e}[/red]")
+            j.add_event("error", f"{phase} run failed: {str(e)[:300]}")
             failures["n"] += 1
-            j.close_orphans("session failed: " + str(e)[:200])
-            TG.notify(f"Session failed ({phase}): {str(e)[:300]}\nBacking off {min(30, 5 * failures['n'])} min.", kind="errors")
+            j.close_orphans("run failed: " + str(e)[:200])
+            TG.notify(f"Run failed ({phase}): {str(e)[:300]}\nBacking off {min(30, 5 * failures['n'])} min.", kind="errors")
         last_session_end = now_et()
         j.set("watch:last_session_end", last_session_end.isoformat(timespec="seconds"))
         if phase in ("intraday", "event"):
@@ -387,7 +387,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         W = effective_watch(SETTINGS.watch, style)
         watcher.cfg = W
         if style != current_style:
-            # the style switch applies to the watcher too: armed entries that fire between sessions are checked
+            # the style switch applies to the watcher too: armed entries that fire between runs are checked
             # against the new caps, instrument flags and breaker, not the ones the daemon booted with
             ctx.risk.L = effective_limits(SETTINGS.risk, style)
             ctx.settings = SETTINGS.model_copy(update={"risk": ctx.risk.L})
@@ -426,7 +426,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
         except Exception as e:
             logging.warning("chores failed: %s", e)
 
-        # watcher: runs in its own thread (sessions block this loop for minutes; a trigger touched mid-session must not be missed)
+        # watcher: runs in its own thread (agent runs block this loop for minutes; a trigger touched mid-session must not be missed)
         market_state["open"] = market_open
         if watcher_thread["t"] is None:
             watcher_thread["t"] = threading.Thread(target=_watcher_loop, name="watcher", daemon=True)
@@ -476,7 +476,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                         _run("intraday", _operator_task(nt), task_id=nt["id"])
                         continue
                     if nt and nt["kind"] == "reflect":
-                        j.complete_task(nt["id"], "reflect session run")
+                        j.complete_task(nt["id"], "reflect run")
                         task, phase = f"SELF-ASSIGNED TASK #{nt['id']}: {nt['text']}", "reflect"
                     elif nt:
                         queued_id = nt["id"]
@@ -500,7 +500,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                 nt = j.next_task()
                 if nt:
                     if nt["kind"] == "reflect":
-                        j.complete_task(nt["id"], "reflect session run")
+                        j.complete_task(nt["id"], "reflect run")
                         _run("reflect", f"SELF-ASSIGNED TASK #{nt['id']}: {nt['text']}")
                     else:
                         _run("research", f"SELF-ASSIGNED TASK #{nt['id']} (close it with complete_task when done): {nt['text']}")
@@ -512,7 +512,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                     picks = KnowledgeBase().next_topics(3)
                     _run("study", "STUDY: pick ONE topic — " + "; ".join(f"{p['title']} [{p['slug']}; {p['why']}; last studied {p['last'][:10]}]" for p in picks)
                          + " — or a gap you noticed in recent sessions. Budget: at most 6 searches and 4 page fetches. Finish with save_knowledge.")
-                elif _lab_done_tonight() < SETTINGS.lab.lab_sessions_per_night and _lab_task():
+                elif _lab_done_tonight() < SETTINGS.lab.lab_Runs_per_night and _lab_task():
                     _run("lab", _lab_task())
                 elif _in_offhours(now, is_td) and j.sessions_today("reflect") < W.max_reflect_per_day:
                     _run("reflect", None)
@@ -570,7 +570,7 @@ def journal(what: str = typer.Argument("sessions", help="sessions | decisions | 
 
 @app.command()
 def lessons(delete: int = typer.Option(None, help="lesson id to delete"), add: str = typer.Option(None, help="add an operator lesson")) -> None:
-    """List, delete, or add lessons (they are injected into every session prompt)."""
+    """List, delete, or add lessons (they are injected into every run prompt)."""
     from .journal import Journal
     j = Journal()
     if delete is not None:
@@ -590,7 +590,7 @@ def playbook() -> None:
 
 @app.command()
 def plan() -> None:
-    """Print the current plan for the next session."""
+    """Print the current plan for the next run."""
     from .journal import Journal
     j = Journal()
     console.print(f"[dim]{j.get('plan_ts')}[/dim]\n{j.get_plan() or '(no plan yet)'}")
@@ -607,7 +607,7 @@ def telegram() -> None:
 
 
 @app.command()
-def notify(text: str, kind: str = typer.Option("fills", help="fills | errors | broker | sessions | events")) -> None:
+def notify(text: str, kind: str = typer.Option("fills", help="fills | errors | broker | Runs | events")) -> None:
     """Send a test message to the paired Telegram chats."""
     from .telegram import notify as _notify
     console.print("sent" if _notify(text, kind=kind, force=True) else "[red]not sent: token missing, no paired chat, or API error[/red]")

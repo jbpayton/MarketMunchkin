@@ -62,7 +62,7 @@ class ExperimentConfig(BaseModel):
     entry_window: str = "10:00-14:00"       # ET; completed 5-minute closes inside this window
     bar_minutes: int = 5
     relvol_min: float = 1.5                 # IEX cumulative session volume vs the prior sessions' same-time average (IEX vs IEX)
-    relvol_lookback_sessions: int = 10
+    relvol_lookback_Runs: int = 10
     rs_min_pct: float = 0.3                 # symbol move since open minus SPY move since open, signed by direction
     max_extension_pct: float = 1.0          # close no further than this beyond the range edge
     min_avg_dollar_volume: float = 20e6
@@ -369,7 +369,7 @@ def detect_signals(bars: pd.DataFrame, spy_bars: pd.DataFrame | None, cfg: Exper
         if dollar_volume is not None and dollar_volume.get(sym, 0) < cfg.min_avg_dollar_volume:
             counters["illiquid"] = counters.get("illiquid", 0) + 1
             continue
-        # relative volume: IEX cumulative volume so far today vs the prior sessions' cumulative volume at the same time of day (IEX vs IEX)
+        # relative volume: IEX cumulative volume so far today vs the prior Runs' cumulative volume at the same time of day (IEX vs IEX)
         cum_today = float(today[today.index < bar_end]["volume"].sum())
         prior = g[g.index < session_open]
         tod = bar_end.astimezone(ET).time()
@@ -378,7 +378,7 @@ def detect_signals(bars: pd.DataFrame, spy_bars: pd.DataFrame | None, cfg: Exper
             gd = gd[[ts.astimezone(ET).time() < tod for ts in gd.index]]
             if len(gd):
                 hist.append(float(gd["volume"].sum()))
-        hist = hist[-cfg.relvol_lookback_sessions:]
+        hist = hist[-cfg.relvol_lookback_Runs:]
         relvol = cum_today / (sum(hist) / len(hist)) if hist and sum(hist) > 0 else None
         if relvol is None or relvol < cfg.relvol_min:
             counters["relvol_below"] = counters.get("relvol_below", 0) + 1
@@ -392,7 +392,7 @@ def detect_signals(bars: pd.DataFrame, spy_bars: pd.DataFrame | None, cfg: Exper
         out.append({"symbol": sym, "direction": direction, "bar_end": bar_end.isoformat(timespec="seconds"), "close": close, "or_high": or_hi, "or_low": or_lo,
                     "edge": edge, "extension_pct": round(extension, 3), "relvol": round(relvol, 2), "move_since_open_pct": round(move, 3),
                     "spy_move_pct": None if spy_move is None else round(spy_move, 3), "rs_pct": None if rs is None else round(rs, 3),
-                    "cum_volume_iex": cum_today, "relvol_sessions": len(hist), "bar_minutes": cfg.bar_minutes,
+                    "cum_volume_iex": cum_today, "relvol_Runs": len(hist), "bar_minutes": cfg.bar_minutes,
                     "dedupe_key": f"{DETECTOR_VERSION}|{day.isoformat()}|{sym}|{direction}"})
     return out, counters
 
@@ -636,7 +636,7 @@ class ExperimentRunner:
             return 0
         if self._last_fetch is None or (now - self._last_fetch).total_seconds() >= 60 or self._bars_cache is None:
             try:
-                self._bars_cache = self.m.bars_realtime(syms + ["SPY"], "5Min", limit=78 * (self.cfg.relvol_lookback_sessions + 2))
+                self._bars_cache = self.m.bars_realtime(syms + ["SPY"], "5Min", limit=78 * (self.cfg.relvol_lookback_Runs + 2))
                 self._last_fetch = now
             except Exception as e:
                 self._bump("stale_data")

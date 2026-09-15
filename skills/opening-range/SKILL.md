@@ -5,7 +5,7 @@ tags: intraday, execution
 ---
 # Opening range
 
-Use in the first two intraday sessions of the day and whenever an armed entry is close to its trigger before 10:30 ET.
+Use in the first two INTRADAY runs of the day and whenever an armed entry is close to its trigger before 10:30 ET.
 
 ## First 5 minutes: look, do not trade
 - No market orders. Spreads are wide, prints are noisy, and the first move often reverses. Armed entries should carry `not_before` 09:35 or later.
@@ -25,4 +25,4 @@ Use in the first two intraday sessions of the day and whenever an armed entry is
 - A holding gapping in your favour beyond target: take at least half at the open, trail the rest under the OR low.
 
 ## Script
-`opening_range.py` (5-minute bars, `symbols`, `or_minutes` default 30) prints, per symbol: gap %, OR high/low, current position within the range, VWAP distance, and relative volume for the elapsed part of the session against the prior sessions' same window.
+`opening_range.py` (5-minute bars, `symbols`, `or_minutes` default 30) prints, per symbol: gap %, OR high/low, current position within the range, VWAP distance, and relative volume for the elapsed part of the session against the prior Runs' same window.

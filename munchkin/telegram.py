@@ -1,8 +1,8 @@
 """Telegram: outbound alerts and a command channel for the operator.
 
-Outbound (`notify`) is used by the daemon for fills, armed fires, errors, broker degradation and session summaries.
+Outbound (`notify`) is used by the daemon for fills, armed fires, errors, broker degradation and run summaries.
 Inbound (`Bot`) long-polls the Bot API and answers quick commands from the journal and broker without the model;
-anything else becomes an operator task that the next session answers, and the reply is pushed back to the chat.
+anything else becomes an operator task that the next run answers, and the reply is pushed back to the chat.
 
 Security: the bot only talks to chats that were paired with a one-time code generated on the dashboard. Everything
 else gets a "not paired" reply and is ignored. Commands are a fixed set; free text only ever becomes a task for the
@@ -25,7 +25,7 @@ from .config import DATA_DIR, HALT_FILE
 log = logging.getLogger("munchkin.telegram")
 STATE_FILE = DATA_DIR / "telegram.json"
 API = "https://api.telegram.org/bot{token}/{method}"
-KINDS = {"fills": "fills, armed entries fired, stops re-armed", "errors": "session failures", "broker": "broker / data feed degradation",
+KINDS = {"fills": "fills, armed entries fired, stops re-armed", "errors": "run failures", "broker": "broker / data feed degradation",
          "sessions": "pre-market plan and post-market review summaries", "events": "watcher wake events (moves, news, expiry)"}
 DEFAULT_NOTIFY = {"fills": True, "errors": True, "broker": True, "sessions": True, "events": False}
 RATE_LIMIT_S = {"errors": 600, "broker": 900}
@@ -163,7 +163,7 @@ HELP = """MarketMunchkin commands
 /mute 60 (minutes)  /unmute
 /notify - show alert toggles;  /notify fills off
 /hypo <claim> - propose a hypothesis for the Lab;  /lab - the ledger
-Anything else you type is sent to the agent as an operator request; the answer comes back here when the next session runs (a minute or so during market hours)."""
+Anything else you type is sent to the agent as an operator request; the answer comes back here on the next run (a minute or so during market hours)."""
 
 
 class Bot:
@@ -204,7 +204,7 @@ class Bot:
             lines.append("Armed: none")
         s = self.j.sessions(1)
         if s:
-            lines.append(f"Last session #{s[0]['id']} {s[0]['phase']} {s[0]['started_at'][11:16]}: {(s[0].get('actions') or s[0].get('summary') or '')[:300]}")
+            lines.append(f"Last Run #{s[0]['id']} {s[0]['phase']} {s[0]['started_at'][11:16]}: {(s[0].get('actions') or s[0].get('summary') or '')[:300]}")
         return "\n".join(lines)
 
     def _positions_text(self) -> str:
@@ -227,7 +227,7 @@ class Bot:
     def _last_text(self) -> str:
         s = self.j.sessions(1)
         if not s:
-            return "no sessions yet"
+            return "no runs yet"
         s = s[0]
         return f"#{s['id']} {s['phase']} {s['started_at'][11:16]} → {(s['ended_at'] or 'running')[11:16]}\n{(s.get('summary') or '(no summary)')[:3000]}"
 
@@ -277,7 +277,7 @@ class Bot:
             from .styles import STYLES, get_style, set_style
             if arg.lower() in STYLES:
                 set_style(self.j, arg.lower(), source="telegram")
-                return f"Style set to {arg.lower()}; applies from the next session."
+                return f"Style set to {arg.lower()}; applies from the next run."
             return f"Current style: {get_style(self.j)}. Use /style defensive | balanced | aggressive."
         if cmd == "/disarm":
             from .entries import EntryBook
@@ -298,7 +298,7 @@ class Bot:
             if r.get("error"):
                 return "Not recorded: " + r["error"]
             self.j.add_event("lab", f"hypothesis #{r['id']} proposed from telegram: {arg[:100]}")
-            return f"Hypothesis #{r['id']} recorded. The agent will write the spec and test it in a lab session tonight; results land on the Brain page and in /lab."
+            return f"Hypothesis #{r['id']} recorded. The agent will write the spec and test it in a LAB run tonight; results land on the Brain page and in /lab."
         if cmd == "/lab":
             from .lab import Lab
             return Lab(self.j).index_text(15)
@@ -328,7 +328,7 @@ class Bot:
         tid = self.j.add_task(question[:1500], priority=0, kind="operator")
         self.j.set(f"telegram:task:{tid}", chat_id)
         self.j.add_event("config", f"operator request #{tid} queued from telegram: {question[:120]}")
-        return f"Queued as request #{tid}. The agent answers when the next session runs; I will send it here."
+        return f"Queued as request #{tid}. The agent answers on its next run; I will send it here."
 
     # ---- polling
     def poll_once(self, timeout: int = 50) -> int:

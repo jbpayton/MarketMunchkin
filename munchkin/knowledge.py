@@ -15,7 +15,7 @@ from .config import DATA_DIR
 KNOWLEDGE_DIR = DATA_DIR / "knowledge"
 MAX_BODY = 6000
 
-# The curriculum: what a trader running this book should understand. Study sessions rotate through it (least recently
+# The curriculum: what a trader running this book should understand. STUDY runs rotate through it (least recently
 # studied first) unless the agent has noticed a more pressing gap. (slug, title, why it matters here)
 CURRICULUM: list[tuple[str, str, str]] = [
     ("inflation-prints", "CPI, PPI and PCE: how the prints are built and how markets trade them", "the machine trades around these releases"),
@@ -108,7 +108,7 @@ class KnowledgeBase:
     def index_text(self, limit: int = 40) -> str:
         rows = self.index()[:limit]
         if not rows:
-            return "(empty — off-hours study sessions fill this in)"
+            return "(empty — off-hours STUDY runs fill this in)"
         return "\n".join(f"- {r['slug']}: {r['title']} — {r['summary'][:120]} [{r['updated'][:10]}]" for r in rows)
 
     # ------------------------------------------------------------------ write

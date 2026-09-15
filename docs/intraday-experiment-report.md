@@ -5,11 +5,11 @@
 Inspected at commit 729d0bb (2026-09-13). Discrepancies with the brief's reading of the repository:
 
 - The brief says the lab spec "labels itself a proposal with nothing implemented". Phase one of the lab (ledger,
-  spec validation, gates, event-study and screen-backtest templates with controls, night lab sessions, Brain card,
+  spec validation, gates, event-study and screen-backtest templates with controls, night LAB runs, Brain card,
   Telegram `/hypo`) was implemented and live on 2026-09-11/12 (commits 064c7a5, b932d8d). Shadow runs, detectors and
   promotion were not, which is what this work adds for one concrete strategy.
 - Entry paths converge on `RiskEngine.check_*`: the agent's buy tools and the watcher's `execute_entry` both call it.
-  There was no cash reservation, so a session and the watcher thread could both pass the settled-cash check in the
+  There was no cash reservation, so a run and the watcher thread could both pass the settled-cash check in the
   same second. Fixed (journal reservations, immediate transactions, counted by the engine).
 - The option multiplier was hard-coded to 100 in four places in the risk engine. Fixed (read from the contract).
 - No migration mechanism existed. A minimal idempotent column-add migration was added; legacy rows carry NULL
@@ -50,7 +50,7 @@ Deviations, all in the direction of less capability rather than more:
 
 See `ExperimentConfig` in `munchkin/experiments.py` and the table in `docs/intraday-experiment.md`. Mode defaults to
 `shadow` on the registered version, and the daemon registers the default version if none exists; the operator toggled v1
-to shadow on 2026-09-13 so it observes from the next session. The envelope (`tighten_limits`) takes the minimum of
+to shadow on 2026-09-13 so it observes from the next run. The envelope (`tighten_limits`) takes the minimum of
 each cap against the active style and disables spreads; a more permissive style cannot loosen it (tested). Version
 identity excludes the operational mode; any parameter change is a new version and cohort.
 

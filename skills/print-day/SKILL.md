@@ -5,7 +5,7 @@ tags: macro, events, risk
 ---
 # Print day
 
-Use when the calendar (get_economic_calendar, the Brain's "next events") shows CPI, PPI, payrolls, PCE, retail sales or an FOMC decision within the next session, or when one printed in the last two hours.
+Use when the calendar (get_economic_calendar, the Brain's "next events") shows CPI, PPI, payrolls, PCE, retail sales or an FOMC decision within the next run, or when one printed in the last two hours.
 
 ## The evening before / pre-market
 1. Get the facts: consensus and prior for headline and core (web_search "<print> consensus <month>", prefer Reuters/Bloomberg/BLS). Write them into the world brief with the source.
@@ -23,7 +23,7 @@ Use when the calendar (get_economic_calendar, the Brain's "next events") shows C
 - Post-market: record one lesson only if the print taught something about the *procedure*, not about the outcome.
 
 ## Event study
-Run `event_study.py` with `dates` (ISO dates of past prints, from BLS pages or a web search) and `symbols` (holdings and candidates plus SPY): it reports each name's return on the day and the next 1 and 3 sessions, versus SPY. Use it to rank which names are robust to a hot print. Keep the dates in a note so the next study does not repeat the search.
+Run `event_study.py` with `dates` (ISO dates of past prints, from BLS pages or a web search) and `symbols` (holdings and candidates plus SPY): it reports each name's return on the day and the next 1 and 3 runs, versus SPY. Use it to rank which names are robust to a hot print. Keep the dates in a note so the next study does not repeat the search.
 
 ## Resources
 `upcoming_releases.txt` lists the next scheduled BLS releases and FOMC decision dates as fetched when the skill was written; verify with get_economic_calendar, which is live.
