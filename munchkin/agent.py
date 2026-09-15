@@ -1,6 +1,8 @@
 """Session runner: builds the prompts, runs the tool loop, persists the outcome."""
 from __future__ import annotations
 
+import re
+
 import datetime as dt
 import logging
 from typing import Any, Callable
@@ -72,9 +74,9 @@ PHASE_INSTRUCTIONS = {
         "add_task (research, experiments, names to watch with triggers). Revise lessons and the playbook if the evidence "
         "warrants. Write in your own words; no fixed format is required, but end with the list of tasks you queued."),
     "event": (
-        "EVENT session: the watcher woke you for the reason(s) in the operator task. Address the trigger FIRST (check the "
-        "position, the resting stop, the news), decide (hold / trail stop / trim / exit / add), then do a quick scan only if "
-        "settled cash is free. Keep it tight; finish with set_plan."),
+        "EVENT session: the watcher woke you for the reason(s) in the operator task. Lead with the DECISION for each held or armed "
+        "name the trigger touches (hold / trail stop / trim / exit / add / disarm) and act on it; the world picture comes after, in "
+        "two lines, only if it changed (add_development). No general scan. Finish with set_plan only if the plan changed."),
 }
 
 
@@ -83,6 +85,74 @@ def _lessons_block(j: Journal, n: int = 20) -> str:
     if not ls:
         return "(none yet)"
     return "\n".join(f"- {l['text'][:300]}" for l in ls)
+
+
+def _reading_block(j: Journal, b: Broker, phase: str, max_chars: int = 5200) -> str:
+    """Pick the one or two skills and notes that matter now and inject their bodies: reading must cost nothing."""
+    try:
+        import datetime as dt
+        from . import macro as M
+        from .knowledge import KnowledgeBase
+        from .skills import SkillStore
+        from .util import is_option
+        now = now_et()
+        wants: list[tuple[int, str, str]] = []   # (priority, kind, key)
+        try:
+            cal = M.bls_schedule(3)
+        except Exception:
+            cal = ""
+        soon = []
+        for line in (cal or "").splitlines():
+            m = re.match(r"(\d{4}-\d{2}-\d{2})\s+\S*\s*(.*)", line.strip())
+            if m:
+                d = dt.date.fromisoformat(m.group(1))
+                if 0 <= (d - now.date()).days <= 1:
+                    soon.append(m.group(2))
+        try:
+            fomc = [d for d in M.fomc_dates(4) if 0 <= (dt.date.fromisoformat(d) - now.date()).days <= 1]
+        except Exception:
+            fomc = []
+        if soon or fomc:
+            wants.append((1, "skill", "print-day"))
+            if fomc:
+                wants += [(1, "note", "fed-reaction-function"), (2, "note", "fomc")]
+            if any("CPI" in x or "PPI" in x for x in soon):
+                wants.append((1, "note", "inflation-prints"))
+            if any("Employment" in x or "JOLTS" in x or "claims" in x.lower() for x in soon):
+                wants.append((2, "note", "labor-market"))
+        if phase == "intraday" and now.time() < dt.time(10, 45):
+            wants.append((2, "skill", "opening-range"))
+        if phase == "postmarket":
+            wants.append((1, "skill", "post-trade-review"))
+        try:
+            pos = b.positions()
+        except Exception:
+            pos = []
+        if any(is_option(p["symbol"]) for p in pos):
+            wants.append((2, "skill", "expiry-and-assignment"))
+        ss, kb = SkillStore(), KnowledgeBase()
+        out, used, seen = [], 0, set()
+        for _, kind, key in sorted(wants, key=lambda x: x[0]):
+            if (kind, key) in seen:
+                continue
+            seen.add((kind, key))
+            if kind == "skill":
+                sk = ss.get(key)
+                if sk and sk.status == "active" and sk.enabled:
+                    body = sk.body[:2400]
+                    if used + len(body) > max_chars:
+                        continue
+                    out.append(f"### skill: {sk.name}\n{body}"); used += len(body)
+            else:
+                note = kb.get(key)
+                if note:
+                    body = note["body"][:1800]
+                    if used + len(body) > max_chars:
+                        continue
+                    out.append(f"### note: {note['title']}\n{body}"); used += len(body)
+        return "\n\n".join(out) if out else "(nothing matched today's calendar, phase or holdings; list_skills / list_knowledge show the rest)"
+    except Exception as e:
+        return f"(reading unavailable: {e})"
 
 
 def _book_block(b: Broker, j: Journal, s: Settings, style: str, st: RiskState) -> str:
@@ -206,6 +276,10 @@ CPI, FOMC, earnings and the like are not a reason to stop looking. Before an eve
 ## Armed entries: intent the watcher executes
 When a name is good but its trigger has not printed, ARM it (arm_entry): trigger price and direction, dollars, stop, target, thesis and grade, plus not_before for post-event timing (e.g. '2026-09-11T08:35' for after CPI) and spy_min_chg_pct as a tape filter (e.g. -1.0). The watcher checks every minute, executes through the same risk engine, arms the stop, and wakes you. "No trigger met" or "wait for the event" with nothing armed is a failure to plan. Review armed entries every session (list_entries) and disarm what no longer fits.
 
+## Write only what changed
+The brief is rebuilt pre-market and post-market; intraday you add developments. The plan is rewritten only when it changes
+(set_plan returns 'unchanged' otherwise). A lesson is a rule with a reachable test, not a diary; a claim goes to the Lab.
+
 ## Plans are yours to revise, not laws to obey
 The plan you read at the start of a session was written by you under earlier information. Re-decide it every session. A plan that says "no entries until X" is only acceptable if it also contains the armed post-X entries. A confirmed catalyst with defined risk/reward above 2:1 on a liquid name deserves at least a probe or an armed entry today, event or not.
 
@@ -215,6 +289,9 @@ Sessions run back to back during market hours and periodically outside them: con
 6. {ending}
 
 Keep tool calls purposeful (max {s.llm.max_tool_calls} per session). Now: {st.date}; market {'OPEN' if st.market_open else 'CLOSED'}.
+
+## Relevant reading, loaded for you (skills and library notes matched to today's calendar, drivers and holdings)
+{_reading_block(j, b, phase)}
 
 ## Book state (computed, not your guess; the policy below is enforced by the risk engine)
 {_book_block(b, j, s, style, st)}
@@ -294,9 +371,14 @@ def build_user_prompt(phase: str, task: str | None, ctx: Context, st: RiskState)
     tq = j.open_tasks(8)
     if tq:
         parts.append("### Your open task queue\n" + "\n".join(f"- #{t['id']} p{t['priority']} [{t['kind']}] {t['text'][:220]}" for t in tq))
+    from . import brief as B
     wb = j.get("world_brief")
     if wb:
-        parts.append(f"### State of the world brief (updated {(j.get('world_brief_ts') or '')[:16]})\n{wb[:5000]}")
+        parts.append(f"### State of the world brief (rebuilt {(j.get('world_brief_ts') or '')[:16]}; rebuild pre-market/research/post-market, add_development intraday)\n{wb[:5000]}")
+        try:
+            parts.append("### What changed in the brief since your last session\n" + B.since(j, ctx.session_id))
+        except Exception as e:
+            parts.append(f"### What changed in the brief since your last session\n(unavailable: {e})")
     plan = j.get_plan()
     if plan:
         parts.append(f"### Plan from last session ({(j.get('plan_ts') or '')[:16]})\n{plan[:5000]}")

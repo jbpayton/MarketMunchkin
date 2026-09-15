@@ -77,6 +77,17 @@ These hold in every style and cannot be changed from the dashboard, the prompt, 
   to commit capital until the session has read the market context, run a broad scan, charted several candidates
   and grounded the name in news.
 
+## A brain that reads as much as it writes
+
+The world brief is a versioned document, not an essay rewritten every session: full rebuilds happen pre-market, in
+research and post-market; intraday and event sessions append sourced developments, and every session is shown what
+changed since its previous one. Every entry and armed entry declares what it **depends on** (a driver, a theme, a
+sector) and what **invalidates** it; the watcher checks the cross-asset dials hourly and wakes the agent for exactly the
+positions whose dependency flipped, and watches the news for each declared theme, not just each held ticker. The one
+or two skills and library notes that matter today (a print tomorrow, an option near expiry, the open) are injected
+into the prompt in full, so reading them costs nothing. The plan is rewritten only when it changes; a thesis that buys
+into a sector the tape has been punishing is asked to say why.
+
 ## Portfolio policy and book state
 
 Caps per position were never enough: the book could end fully invested in slow, low-beta names under an aggressive

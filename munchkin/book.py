@@ -7,6 +7,7 @@ beta, horizon, age and progress, concentration and style-fit flags. The risk eng
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
 import re
 from typing import Any
@@ -109,7 +110,11 @@ def book_state(broker: Any, journal: Any, limits: Any, style: str, table: Any = 
         entry = float(p.get("avg_entry_price") or 0)
         cur = float(p.get("current_price") or 0)
         progress = round((cur - entry) / (tgt - entry) * 100, 0) if tgt and entry and tgt != entry else None
-        rows.append({"symbol": sym, "value": round(value, 2), "pct": round(value / equity * 100, 1) if equity else None, "sector": sector, "beta": beta, "atr_pct": atr,
+        try:
+            meta = json.loads(th.get("meta") or "{}") if th else {}
+        except Exception:
+            meta = {}
+        rows.append({"symbol": sym, "value": round(value, 2), "depends_on": meta.get("depends_on") or None, "invalidated_by": meta.get("invalidated_by") or None, "pct": round(value / equity * 100, 1) if equity else None, "sector": sector, "beta": beta, "atr_pct": atr,
                      "horizon_days": horizon_days, "age_days": age, "horizon_elapsed": bool(horizon_days is not None and age is not None and age >= horizon_days),
                      "slow": slow, "pnl_pct": round(pnl_pct, 2), "progress_to_target_pct": progress, "is_option": is_option(sym),
                      "expected_move_pct": expected_move_pct(atr, horizon_days)})
@@ -145,7 +150,8 @@ def book_state_text(bs: dict[str, Any]) -> str:
     for r in bs["positions"]:
         lines.append(f"- {r['symbol']}: ${r['value']:.2f} ({r['pct']}%), {r['sector'] or '?'}, beta {round(r['beta'], 2) if r['beta'] is not None else '?'}, ATR {round(r['atr_pct'], 2) if r['atr_pct'] is not None else '?'}%/d, "
                      f"horizon {r['horizon_days'] if r['horizon_days'] is not None else '?'}d, age {r['age_days'] if r['age_days'] is not None else '?'}d, "
-                     f"P&L {r['pnl_pct']:+.2f}%" + (f", {r['progress_to_target_pct']:.0f}% of the way to target" if r['progress_to_target_pct'] is not None else "") + (" · SLOW" if r["slow"] else "") + (" · HORIZON ELAPSED" if r["horizon_elapsed"] else ""))
+                     f"P&L {r['pnl_pct']:+.2f}%" + (f", {r['progress_to_target_pct']:.0f}% of the way to target" if r['progress_to_target_pct'] is not None else "") + (" · SLOW" if r["slow"] else "") + (" · HORIZON ELAPSED" if r["horizon_elapsed"] else "")
+                     + (f" · depends on: {r['depends_on']}" if r.get("depends_on") else " · depends on: (not declared)") + (f" · invalidated by: {r['invalidated_by']}" if r.get("invalidated_by") else ""))
     if bs["by_sector_pct"]:
         lines.append("sectors: " + ", ".join(f"{k} {v}%" for k, v in sorted(bs["by_sector_pct"].items(), key=lambda x: -x[1])) + f" · slow theses {bs['slow_pct']}%")
     if bs["flags"]:

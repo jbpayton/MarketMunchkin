@@ -742,3 +742,45 @@ def test_book_state_flags_and_horizon_parsing():
     assert any("cash $5.11 is below" in f for f in bs["flags"]) and any("Utilities 59%" in f for f in bs["flags"]) and any("slow theses" in f for f in bs["flags"])
     assert not any("PNW is 39.0%" in f for f in bs["flags"])                  # 39% is under the 50% aggressive position cap; the probe rule is at entry
     assert bs["positions"][1]["slow"] and bs["positions"][1]["expected_move_pct"] == pytest.approx(3.79, abs=0.01)
+
+
+def test_brief_versions_developments_and_diff(tmp_path):
+    from munchkin.journal import Journal
+    from munchkin import brief as B
+    j = Journal(tmp_path / "b.db")
+    B.rewrite(j, "## Regime\nrisk-off 31\n## Drivers\noil shock (WTI 103, Reuters 09-15)", session_id=10)
+    ok, why = B.rewrite_allowed(j, "intraday")
+    assert not ok and "add_development" in why                              # just rebuilt: intraday may only append
+    assert B.rewrite_allowed(j, "premarket")[0]
+    bullet = B.add_development(j, "Drivers", "Hormuz reopening talks reported", "Reuters 09-15 11:02", session_id=12)
+    assert bullet.startswith("- [") and "## Developments" in j.get("world_brief")
+    since = B.since(j, session_id=12)                                        # what session 12 sees vs what session 10 wrote
+    assert "added:" in since and "Hormuz" in since
+    B.rewrite(j, "## Regime\nneutral 46\n## Drivers\noil shock easing (Reuters 09-15)", session_id=20)   # allowed: premarket-style rewrite by phase
+    since2 = B.since(j, session_id=20)
+    assert "removed:" in since2 and "risk-off 31" in since2
+    assert B.missing_sections("## Regime\nx\n## Drivers\ny") == ["Themes", "Calendar", "Risks", "Facts"]
+    assert len(B.history(j)) == 3
+
+
+def test_dial_flips_and_theme_news_wake_only_dependent_positions(tmp_path, monkeypatch):
+    from munchkin.watch import Watcher
+    from munchkin import watch as W
+    import munchkin.macro as M
+    class J:
+        def __init__(self): self.kv, self.marks = {}, {}
+        def get(self, k, d=None): return self.kv.get(k, d)
+        def set(self, k, v): self.kv[k] = v
+        def thesis_for(self, sym): return {"meta": '{"depends_on": "oil shock; AI data-center power", "invalidated_by": "oil dial flips to headwind"}'} if sym == "SO" else {"meta": "{}"}
+    w = Watcher.__new__(Watcher); w.j = J(); w._recently = lambda k, m: False; w._mark = lambda k: None
+    monkeypatch.setattr(M, "market_dashboard", lambda: {})
+    monkeypatch.setattr(M, "world_dials", lambda tape, reg, vix: [{"key": "oil", "score": -0.9}, {"key": "rates", "score": 0.4}])
+    w.j.kv["watch:dials"] = {"oil": 0.5, "rates": 0.4}                        # oil was a tailwind last hour
+    monkeypatch.setattr("munchkin.search.web_search", lambda q, c, n, t: [{"title": f"headline about {q}", "url": "u", "date": "2026-09-15T11:00"}])
+    ev = w.check_world([{"symbol": "SO"}, {"symbol": "UBER"}])
+    flips = [e for e in ev if e.startswith("DIAL FLIP")]
+    assert len(flips) == 1 and "oil" in flips[0] and "SO" in flips[0] and "UBER" not in flips[0]
+    assert any(e.startswith("THEME NEWS (oil shock; SO)") for e in ev) and any("AI data-center power" in e for e in ev)
+    assert w.j.kv["watch:dials"]["oil"] == -0.9 and len(w.j.kv["watch:theme_seen"]) == 2
+    ev2 = w.check_world([{"symbol": "SO"}])                                   # same headlines again: silence
+    assert not [e for e in ev2 if e.startswith("THEME NEWS")]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import logging
 import time
 import traceback
@@ -124,6 +125,24 @@ class ToolRegistry:
         if legs:
             base += " | legs: " + "; ".join(f"{occ_human(l.get('symbol',''))} {l.get('side')} {l.get('position_intent')} filled={l.get('filled_qty')}@{l.get('filled_avg_price')}" for l in legs)
         return base
+
+    def _laggard_note(self, symbol: str, thesis: str) -> str | None:
+        """A thesis that buys into a sector the tape has been punishing should say so; this is a note, not a refusal."""
+        try:
+            from . import screener as scr
+            t, _ = scr.load()
+            root = parse_occ(symbol)["underlying"] if parse_occ(symbol) else symbol
+            if t is None or root not in t.index or "sector" not in t.columns or "chg_20d_pct" not in t.columns:
+                return None
+            sec = t.loc[root, "sector"]
+            if not sec or sec != sec:
+                return None
+            m = float(t[t["sector"] == sec]["chg_20d_pct"].mean())
+            if m <= -3.0 and not re.search(r"revers|oversold|contrarian|laggard|mean[- ]rev|bounce", thesis or "", re.I):
+                return f"{sec} is a 20-day laggard ({m:+.1f}%): the thesis does not say why it buys a laggard"
+        except Exception:
+            return None
+        return None
 
     def _journal_order(self, kind: str, symbol: str, side: str, qty: Any, price: Any, order: dict[str, Any] | None,
                        status: str, meta: dict[str, Any] | None = None, **fields: Any) -> None:
@@ -831,11 +850,27 @@ class ToolRegistry:
             if c.dry_run or not c.memory_writes:
                 c.journal.set("world_brief_dryrun", text.strip())
                 return "world brief saved (dry-run copy; the live brief is untouched)"
-            c.journal.set("world_brief", text.strip())
-            c.journal.set("world_brief_ts", now_et().isoformat(timespec="seconds"))
-            return "world brief saved; it is shown at the start of every session"
+            from . import brief as B
+            ok, why = B.rewrite_allowed(c.journal, c.phase)
+            if not ok:
+                return "REJECTED: " + why
+            missing = B.missing_sections(text)
+            B.rewrite(c.journal, text, c.session_id)
+            return "world brief rebuilt; every session sees it plus what changed since its last session" + (f". Sections not found: {', '.join(missing)} (use headings: Regime, Drivers, Themes, Calendar, Risks, Facts)" if missing else "")
 
-        self.add("set_world_brief", "Save/replace the 'state of the world' brief: macro regime and risk appetite, key events today/this week (data, Fed, earnings, geopolitics), sector leadership/laggards, live themes with tickers, and known risks. Refresh it pre-market and whenever something material changes.",
+        def add_development(section: str, text: str, source: str) -> str:
+            if c.dry_run or not c.memory_writes:
+                return "dry run: not saved"
+            from . import brief as B
+            if not source.strip():
+                return "ERROR: cite the source (outlet + time, or the tool that produced the number)"
+            b = B.add_development(c.journal, section, text, source, c.session_id)
+            return "added to the brief: " + b
+
+        self.add("add_development", "Append one timestamped, sourced development to the world brief without rewriting it (intraday and event sessions). section: Regime | Drivers | Themes | Calendar | Risks | Facts.",
+                 _schema({"section": _p("section", "string", "which section it belongs to"), "text": _p("text", "string", "one or two sentences"), "source": _p("source", "string", "outlet + time, or tool")}, ["section", "text", "source"]), add_development)
+
+        self.add("set_world_brief", "REBUILD the 'state of the world' brief (pre-market, research, post-market; intraday sessions use add_development). Use the headings Regime, Drivers, Themes, Calendar, Risks, Facts. Save/replace the: macro regime and risk appetite, key events today/this week (data, Fed, earnings, geopolitics), sector leadership/laggards, live themes with tickers, and known risks. Refresh it pre-market and whenever something material changes.",
                  _schema({"text": _p("text", "string", "the brief (10-25 lines, markdown ok)")}, ["text"]), set_world_brief)
 
         # ---------------- options data
@@ -883,7 +918,7 @@ class ToolRegistry:
         # ---------------- orders: stocks
         def buy_stock(symbol: str, thesis: str, target: str, stop: str, horizon: str, catalyst_grade: str,
                       stop_price: float, target_price: float, notional: float | None = None, qty: float | None = None,
-                      order_type: str = "market", limit_price: float | None = None) -> str:
+                      order_type: str = "market", limit_price: float | None = None, depends_on: str = "", invalidated_by: str = "") -> str:
             gate = self._trading_gate()
             if gate:
                 return gate
@@ -914,7 +949,10 @@ class ToolRegistry:
                 viol.append(f"target_price {target_price} must be above the entry price {ref}")
             if ref and float(stop_price) < ref * 0.80:
                 viol.append(f"stop_price {stop_price} is more than 20% below entry; too loose for this account")
-            meta = {"catalyst_grade": grade, "stop_price": stop_price, "target_price": target_price}
+            meta = {"catalyst_grade": grade, "stop_price": stop_price, "target_price": target_price, "depends_on": depends_on.strip()[:160], "invalidated_by": invalidated_by.strip()[:200]}
+            lag = self._laggard_note(symbol, thesis)
+            if lag:
+                meta["laggard_note"] = lag
             if viol:
                 self._journal_order("open", symbol, "buy", qty or notional, est_px, None, "blocked", {**meta, "violations": viol}, thesis=thesis, target=target, stop=stop, horizon=horizon)
                 return "REJECTED:\n- " + "\n- ".join(viol)
@@ -939,7 +977,7 @@ class ToolRegistry:
                           "horizon": _p("horizon", "string", "expected holding period, e.g. '3-7 trading days'"),
                           "catalyst_grade": _p("catalyst_grade", "string", "confirmed (primary source / major outlet, dated today-yesterday) | speculative (rumor, unnamed sources, social, single small outlet) | none (unexplained move, pure technical). Scales the size cap: 1.0 / 0.5 / 0.35"),
                           "stop_price": _p("stop_price", "number", "numeric protective stop; a resting stop order is placed at the broker automatically"),
-                          "target_price": _p("target_price", "number", "numeric first target; the daemon wakes you when it trades")},
+                          "target_price": _p("target_price", "number", "numeric first target; the daemon wakes you when it trades"), "depends_on": _p("depends_on", "string", "the driver or theme this thesis expresses (e.g. oil shock, FOMC hold, AI data-center power, sector: Utilities)"), "invalidated_by": _p("invalidated_by", "string", "what breaks it: a dial flip, a calendar outcome, a headline type")},
                          ["symbol", "thesis", "target", "stop", "horizon", "catalyst_grade", "stop_price", "target_price"]), buy_stock)
 
         def sell_stock(symbol: str, reason: str, qty: float | None = None, order_type: str = "market", limit_price: float | None = None) -> str:
@@ -985,7 +1023,7 @@ class ToolRegistry:
 
         # ---------------- orders: options
         def buy_option(option_symbol: str, qty: int, limit_price: float, thesis: str, target: str, stop: str, horizon: str, catalyst_grade: str,
-                       stop_premium: float | None = None, target_premium: float | None = None) -> str:
+                       stop_premium: float | None = None, target_premium: float | None = None, depends_on: str = "", invalidated_by: str = "") -> str:
             gate = self._trading_gate()
             if gate:
                 return gate
@@ -1000,7 +1038,7 @@ class ToolRegistry:
             viol = (c.research.gate(pp["underlying"]) if pp else []) + viol
             if stop_premium is not None and not (0 < float(stop_premium) < float(limit_price)):
                 viol.append(f"stop_premium {stop_premium} must be below the limit price {limit_price}")
-            meta = {"catalyst_grade": grade, "info": info, "stop_price": stop_premium, "target_price": target_premium}
+            meta = {"catalyst_grade": grade, "info": info, "stop_price": stop_premium, "target_price": target_premium, "depends_on": depends_on.strip()[:160], "invalidated_by": invalidated_by.strip()[:200]}
             if viol:
                 self._journal_order("open", sym, "buy", qty, limit_price, None, "blocked", {**meta, "violations": viol}, thesis=thesis, target=target, stop=stop, horizon=horizon)
                 return "REJECTED:\n- " + "\n- ".join(viol) + f"\n(quote: bid {info.get('bid')} ask {info.get('ask')} oi {info.get('oi')} dte {info.get('dte')})"
@@ -1020,7 +1058,7 @@ class ToolRegistry:
                           "stop": _p("stop", "string", "exit condition on the downside"), "horizon": _p("horizon", "string", "planned holding period"),
                           "catalyst_grade": _p("catalyst_grade", "string", "confirmed | speculative | none (scales the size cap 1.0 / 0.5 / 0.35)"),
                           "stop_premium": _p("stop_premium", "number", "per-share premium at which to stop out; a DAY stop order rests at the broker (re-armed each morning)"),
-                          "target_premium": _p("target_premium", "number", "per-share premium target; the daemon wakes you when the mark reaches it")},
+                          "target_premium": _p("target_premium", "number", "per-share premium target; the daemon wakes you when the mark reaches it"), "depends_on": _p("depends_on", "string", "the driver or theme this thesis expresses (e.g. oil shock, FOMC hold, AI data-center power, sector: Utilities)"), "invalidated_by": _p("invalidated_by", "string", "what breaks it: a dial flip, a calendar outcome, a headline type")},
                          ["option_symbol", "qty", "limit_price", "thesis", "target", "stop", "horizon", "catalyst_grade"]), buy_option)
 
         def sell_option(option_symbol: str, reason: str, qty: int | None = None, limit_price: float | None = None) -> str:
@@ -1059,7 +1097,7 @@ class ToolRegistry:
                  _schema({"option_symbol": _p("option_symbol", "string", "OCC symbol"), "qty": _p("qty", "integer", "contracts (omit = all)"),
                           "limit_price": _p("limit_price", "number", "per-share limit"), "reason": _p("reason", "string", "why")}, ["option_symbol", "reason"]), sell_option)
 
-        def open_spread(legs: list[dict[str, Any]], qty: int, net_debit: float, thesis: str, target: str, stop: str, horizon: str, catalyst_grade: str) -> str:
+        def open_spread(legs: list[dict[str, Any]], qty: int, net_debit: float, thesis: str, target: str, stop: str, horizon: str, catalyst_grade: str, depends_on: str = "", invalidated_by: str = "") -> str:
             gate = self._trading_gate()
             if gate:
                 return gate
@@ -1086,7 +1124,7 @@ class ToolRegistry:
             o = c.broker.submit_mleg_order(norm, int(qty), float(net_debit))
             o = self._await_order(o["id"])
             for l in norm:
-                self._journal_order("open", l["symbol"], l["side"], qty, net_debit, o, o.get("status", "submitted"), {"legs": norm, "spread": label, "catalyst_grade": grade}, thesis=thesis, target=target, stop=stop, horizon=horizon, underlying=u)
+                self._journal_order("open", l["symbol"], l["side"], qty, net_debit, o, o.get("status", "submitted"), {"legs": norm, "spread": label, "catalyst_grade": grade, "depends_on": depends_on.strip()[:160], "invalidated_by": invalidated_by.strip()[:200]}, thesis=thesis, target=target, stop=stop, horizon=horizon, underlying=u)
             extra = ""
             if o.get("status") == "filled" and len(norm) == 2:
                 fill = float(o.get("filled_avg_price") or net_debit)
@@ -1100,7 +1138,7 @@ class ToolRegistry:
                           "qty": _p("qty", "integer", "number of spreads"), "net_debit": _p("net_debit", "number", "limit net debit per share"),
                           "thesis": _p("thesis", "string", "why"), "target": _p("target", "string", "exit target"), "stop": _p("stop", "string", "exit condition"),
                           "horizon": _p("horizon", "string", "holding period"),
-                          "catalyst_grade": _p("catalyst_grade", "string", "confirmed | speculative | none")},
+                          "catalyst_grade": _p("catalyst_grade", "string", "confirmed | speculative | none"), "depends_on": _p("depends_on", "string", "the driver or theme this thesis expresses (e.g. oil shock, FOMC hold, AI data-center power, sector: Utilities)"), "invalidated_by": _p("invalidated_by", "string", "what breaks it: a dial flip, a calendar outcome, a headline type")},
                          ["legs", "qty", "net_debit", "thesis", "target", "stop", "horizon", "catalyst_grade"]), open_spread)
 
         def close_spread(legs: list[dict[str, Any]], qty: int, net_credit: float, reason: str) -> str:
@@ -1166,6 +1204,10 @@ class ToolRegistry:
             if c.dry_run or not c.memory_writes:
                 c.journal.set("plan_dryrun", text.strip())
                 return "plan saved (dry-run/read-only copy; the live plan is untouched)"
+            norm = lambda t: re.sub(r"\s+", " ", (t or "")).strip().lower()  # noqa: E731
+            if norm(text) == norm(c.journal.get_plan()):
+                c.plan_set = True
+                return "plan unchanged (not rewritten); the next session sees the same plan with its original timestamp"
             c.journal.set_plan(text)
             c.plan_set = True
             return "plan saved; it will be shown at the start of the next session"
@@ -1214,7 +1256,7 @@ class ToolRegistry:
         def arm_entry(symbol: str, direction: str, trigger_price: float, notional: float, stop_price: float, target_price: float,
                       thesis: str, catalyst_grade: str, horizon: str, expires_hours: float = 30.0, max_chase_pct: float = 1.0,
                       not_before: str | None = None, spy_min_chg_pct: float | None = None, expression: str = "stock",
-                      dte_target: int = 14, opt_stop_pct: float = 0.5, opt_target_pct: float = 1.0) -> str:
+                      dte_target: int = 14, opt_stop_pct: float = 0.5, opt_target_pct: float = 1.0, depends_on: str = "", invalidated_by: str = "") -> str:
             gate = self._trading_gate()
             if gate:
                 return gate
@@ -1294,7 +1336,10 @@ class ToolRegistry:
             rec = EB.arm(u, direction, trg, float(notional), sp, tp, thesis, grade, horizon, expires_hours, c.session_id, max_chase_pct, nb, spy_min_chg_pct,
                          expression, int(dte_target), float(opt_stop_pct), float(opt_target_pct))
             c.journal.add_decision(c.session_id, "arm", u, side="buy", qty=float(notional), price=trg, thesis=thesis, target=str(tp), stop=str(sp),
-                                   horizon=horizon, status="armed", meta={"catalyst_grade": grade, "direction": direction, "expires": rec["expires"], "reach": reach.strip()}, underlying=u)
+                                   horizon=horizon, status="armed", meta={"catalyst_grade": grade, "direction": direction, "expires": rec["expires"], "reach": reach.strip(), "depends_on": depends_on.strip()[:160], "invalidated_by": invalidated_by.strip()[:200]}, underlying=u)
+            if depends_on.strip() or invalidated_by.strip():
+                rec["depends_on"], rec["invalidated_by"] = depends_on.strip()[:160], invalidated_by.strip()[:200]
+                c.journal.set("entries:" + u, rec)
             cond = (f", not before {nb[:16]}" if nb else "") + (f", only if SPY today >= {spy_min_chg_pct}%" if spy_min_chg_pct is not None else "")
             ex = ""
             if expression != "stock":
@@ -1325,7 +1370,7 @@ class ToolRegistry:
                           "expression": _p("expression", "string", "stock (default) | call | put | call_spread | put_spread"),
                           "dte_target": _p("dte_target", "integer", "target days to expiry for option expressions (7-60, default 14)"),
                           "opt_stop_pct": _p("opt_stop_pct", "number", "option position stop as a fraction of premium paid (default 0.5)"),
-                          "opt_target_pct": _p("opt_target_pct", "number", "option first target as a fraction gain on premium (default 1.0 = +100%)")},
+                          "opt_target_pct": _p("opt_target_pct", "number", "option first target as a fraction gain on premium (default 1.0 = +100%)"), "depends_on": _p("depends_on", "string", "the driver or theme this thesis expresses (e.g. oil shock, FOMC hold, AI data-center power, sector: Utilities)"), "invalidated_by": _p("invalidated_by", "string", "what breaks it: a dial flip, a calendar outcome, a headline type")},
                          ["symbol", "direction", "trigger_price", "notional", "stop_price", "target_price", "thesis", "catalyst_grade", "horizon"]), arm_entry)
 
         def list_entries() -> str:

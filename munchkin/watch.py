@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
+import json
 import logging
 from typing import Any
 
@@ -154,6 +156,66 @@ class Watcher:
                     self._mark(key)
         self.last_news_check = now_et()
         return events
+
+    def check_world(self, positions: list[dict[str, Any]]) -> list[str]:
+        """Hourly: a cross-asset dial changing sign, or a fresh headline on a theme a position depends on, wakes the agent
+        for exactly the positions that declared the dependency."""
+        if self._recently("world:tick", 60):
+            return []
+        self._mark("world:tick")
+        events: list[str] = []
+        deps: dict[str, str] = {}      # symbol -> lowercased dependency text (for dial matching)
+        themes_of: dict[str, str] = {}  # symbol -> depends_on as written (for theme queries)
+        for p in positions:
+            th = self.j.thesis_for(p["symbol"]) or {}
+            try:
+                meta = json.loads(th.get("meta") or "{}")
+            except Exception:
+                meta = {}
+            txt = " ".join(x for x in (meta.get("depends_on"), meta.get("invalidated_by")) if x).strip()
+            if txt:
+                deps[p["symbol"]] = txt.lower()
+            if meta.get("depends_on"):
+                themes_of[p["symbol"]] = str(meta["depends_on"])
+        try:
+            from . import macro as M
+            dials = M.world_dials(M.market_dashboard(), None, None)
+        except Exception:
+            dials = []
+        prev = self.j.get("watch:dials") or {}
+        cur = {d["key"]: d["score"] for d in dials}
+        words = {"rates": ["rate", "10y", "yield", "fomc", "fed", "hike", "cut"], "oil": ["oil", "wti", "brent", "hormuz", "energy"], "dollar": ["dollar", "dxy"],
+                 "credit": ["credit", "spread", "hy"], "vol": ["vix", "vol"], "breadth": ["breadth"], "size": ["small cap", "iwm"], "growth": ["growth", "qqq", "ai"],
+                 "trend": ["spy", "index", "trend"], "crypto": ["crypto", "btc"], "cycle": ["copper", "gold"], "participation": ["participation", "equal-weight"]}
+        def sign(x: float) -> int:
+            return 1 if x > 0.15 else -1 if x < -0.15 else 0
+        label = {1: "tailwind", -1: "headwind", 0: "neutral"}
+        for k, sc in cur.items():
+            if k in prev and sign(prev[k]) != sign(sc):
+                hit = [s for s, ds in deps.items() if any(w in ds for w in words.get(k, [k]))]
+                events.append(f"DIAL FLIP: {k} went {label[sign(prev[k])]} -> {label[sign(sc)]} ({sc:+.2f})" + (f"; positions that depend on it: {', '.join(hit)} — re-thesis or act" if hit else ""))
+        if cur:
+            self.j.set("watch:dials", cur)
+        themes: dict[str, list[str]] = {}
+        for sym, ds in themes_of.items():
+            for part in re.split(r"[;,/]| and ", ds):
+                t = part.strip()
+                if 4 <= len(t) <= 48 and not t.lower().startswith("sector"):
+                    themes.setdefault(t, []).append(sym)
+        if themes:
+            try:
+                from .search import web_search
+                seen = set(self.j.get("watch:theme_seen") or [])
+                for theme, syms in list(themes.items())[:5]:
+                    for r in web_search(theme, "news", 4, "day")[:4]:
+                        key = (r.get("title") or "")[:70]
+                        if key and key not in seen:
+                            seen.add(key)
+                            events.append(f"THEME NEWS ({theme}; {', '.join(sorted(set(syms)))}): {r.get('title')} [{(r.get('date') or '')[:16]}] {r.get('url') or ''}")
+                self.j.set("watch:theme_seen", sorted(seen)[-400:])
+            except Exception as e:
+                log.warning("theme news check failed: %s", e)
+        return events[:8]
 
     def check_expiry(self, positions: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
         """Never hold an option into exercise: wake early, force-close on expiration day, file DNE as backstop."""
@@ -388,4 +450,8 @@ class Watcher:
                 events += self.check_news(positions)
             except Exception as e:
                 log.warning("watch news: %s", e)
+            try:
+                events += self.check_world(positions)
+            except Exception as e:
+                log.warning("watch world: %s", e)
         return events, actions
