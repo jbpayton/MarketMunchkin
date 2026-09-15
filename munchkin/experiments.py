@@ -292,11 +292,15 @@ def session_bounds(broker: Any, day: dt.date) -> tuple[dt.datetime, dt.datetime]
         cal = broker.calendar(day, day)
     except Exception:
         cal = []
+    def _t(v: Any) -> tuple[int, int] | None:
+        s = str(v)
+        m = re.search(r"(\d{1,2}):(\d{2})", s[-8:] if "T" in s or " " in s else s)
+        return (int(m.group(1)), int(m.group(2))) if m else None
     for c in cal:
         if str(c.get("date"))[:10] == day.isoformat():
-            o = str(c.get("open")); cl = str(c.get("close"))
-            oh, om = int(o[:2]), int(o[3:5]); ch, cm = int(cl[:2]), int(cl[3:5])
-            return dt.datetime(day.year, day.month, day.day, oh, om, tzinfo=ET), dt.datetime(day.year, day.month, day.day, ch, cm, tzinfo=ET)
+            o, cl = _t(c.get("open")), _t(c.get("close"))
+            if o and cl:
+                return dt.datetime(day.year, day.month, day.day, o[0], o[1], tzinfo=ET), dt.datetime(day.year, day.month, day.day, cl[0], cl[1], tzinfo=ET)
     return None
 
 
@@ -580,7 +584,9 @@ class ExperimentRunner:
         self.dollar_volume = dollar_volume or {}
         self.chain_fn = chain_fn   # (underlying) -> list of contract rows with bid/ask/delta/dte/spread_pct/quote_age_s/multiplier/type
         self.counters: dict[str, int] = {}
-        self._last_bar_check: dt.datetime | None = None
+        self._last_fetch: dt.datetime | None = None
+        self._last_heartbeat: dt.datetime | None = None
+        self._bars_cache: pd.DataFrame | None = None
 
     # ---- helpers
     def _bump(self, k: str, n: int = 1) -> None:
@@ -622,29 +628,31 @@ class ExperimentRunner:
 
     # ---- detection
     def _detect(self, now: dt.datetime, s_open: dt.datetime, s_close: dt.datetime) -> int:
-        # only at (or just after) a completed-bar boundary, once per bar
-        boundary = now.replace(second=0, microsecond=0)
-        boundary = boundary - dt.timedelta(minutes=boundary.minute % self.cfg.bar_minutes)
-        if self._last_bar_check is not None and boundary <= self._last_bar_check:
-            return 0
-        self._last_bar_check = boundary
+        # every tick, with the bar fetch throttled to once a minute: a completed bar can arrive any time after the boundary,
+        # so gating on the boundary itself races the feed and silently misses bars (that happened on the first day)
         syms = [s for s in self.universe if s != "SPY"]
         if not syms:
+            self._heartbeat(now, "no universe")
             return 0
-        try:
-            bars = self.m.bars_realtime(syms + ["SPY"], "5Min", limit=78 * (self.cfg.relvol_lookback_sessions + 2))
-        except Exception as e:
+        if self._last_fetch is None or (now - self._last_fetch).total_seconds() >= 60 or self._bars_cache is None:
+            try:
+                self._bars_cache = self.m.bars_realtime(syms + ["SPY"], "5Min", limit=78 * (self.cfg.relvol_lookback_sessions + 2))
+                self._last_fetch = now
+            except Exception as e:
+                self._bump("stale_data")
+                self.store.event(self.exp["id"], "error", f"bars unavailable: {str(e)[:120]}")
+                return 0
+        bars = self._bars_cache
+        if bars is None or bars.empty:
             self._bump("stale_data")
-            self.store.event(self.exp["id"], "error", f"bars unavailable: {str(e)[:120]}")
-            return 0
-        if bars.empty:
-            self._bump("stale_data")
+            self._heartbeat(now, "no bars")
             return 0
         spy = bars.xs("SPY", level="symbol", drop_level=False) if "SPY" in bars.index.get_level_values("symbol") else None
         rest = bars[bars.index.get_level_values("symbol") != "SPY"]
         cands, counters = detect_signals(rest, spy, self.cfg, now, s_open, s_close, self.dollar_volume or None)
         for k, v in counters.items():
             self._bump(k, v)
+        self._heartbeat(now, f"universe {len(syms)}, bars {len(bars)} rows, candidates {len(cands)}")
         n = 0
         receipt = now.isoformat(timespec="seconds")
         for c in cands:
@@ -666,6 +674,13 @@ class ExperimentRunner:
             if not self.cfg.classifier_enabled:
                 self.store.set_classification(sid, "skipped", None, 0, "", PROMPT_VERSION)
         return n
+
+    def _heartbeat(self, now: dt.datetime, note: str) -> None:
+        """Once an hour: prove the detector ran and persist the rejection counters (they live in memory otherwise)."""
+        if self._last_heartbeat is not None and (now - self._last_heartbeat).total_seconds() < 3600:
+            return
+        self._last_heartbeat = now
+        self.store.event(self.exp["id"], "heartbeat", f"{note}; rejections so far {json.dumps(self.counters, sort_keys=True)}")
 
     # ---- classification (bounded: one signal per tick so the model is never monopolised)
     def _classify_pending(self) -> int:

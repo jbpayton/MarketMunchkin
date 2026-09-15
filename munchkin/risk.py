@@ -192,6 +192,9 @@ class RiskEngine:
                        if (parse_occ(p["symbol"])["underlying"] if parse_occ(p["symbol"]) else p["symbol"]) == root)
         if cost + existing > cap + 0.01:
             v.append(f"exposure to {root} would be ${cost + existing:.2f} (stock + options combined) > cap ${cap:.2f}{cap_note}")
+        probe_max = float(getattr(self.L, "probe_max", 0) or 0)
+        if probe_max and existing <= 0.01 and cost > probe_max + 0.01:
+            v.append(f"first entry into {root} is a probe: ${cost:.2f} > the style's probe maximum ${probe_max:.0f}; open the probe, then add on evidence up to the cap")
         return v
 
     def avg_dollar_volume(self, symbol: str) -> float | None:

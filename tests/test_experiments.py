@@ -343,3 +343,23 @@ def test_contract_multiplier_comes_from_the_contract():
     from munchkin.risk import RiskEngine
     e = RiskEngine.__new__(RiskEngine); e.b = FakeBroker(); RiskEngine._mult_cache.clear()
     assert e.multiplier("ADJ260918C00010000") == 10.0 and e.multiplier("UBER260918C00072500") == 100.0
+
+
+def test_session_bounds_accepts_iso_and_clock_formats():
+    from munchkin.experiments import session_bounds
+    class Iso:
+        def calendar(self, a, b): return [{"date": "2026-09-14", "open": "2026-09-14T09:30:00", "close": "2026-09-14T13:00:00"}]
+    o, c = session_bounds(Iso(), dt.date(2026, 9, 14))
+    assert (o.hour, o.minute, c.hour, c.minute) == (9, 30, 13, 0)
+    o2, c2 = session_bounds(FakeBroker(close="16:00"), dt.date(2026, 9, 14))
+    assert (o2.hour, c2.hour) == (9, 16)
+
+
+def test_detection_runs_on_every_tick_not_just_boundaries(tmp_path):
+    clock = Clock(T(10, 16).replace(second=30))
+    m = FakeMarket(make_bars(BULL), quotes={"BRK": {"price": 101.4, "bid": 101.3, "ask": 101.5, "price_src": "iex-realtime"}, "BEAR": {"price": 49.1, "price_src": "iex-realtime"}})
+    st, r = runner(tmp_path, clock, m, llm=None)
+    assert r.tick()["new_signals"] == 2
+    clock.t = T(10, 17)                                 # same 5-minute boundary, a later tick: nothing new, nothing crashes
+    assert r.tick()["new_signals"] == 0
+    assert any(e["kind"] == "heartbeat" for e in [dict(x) for x in st.conn.execute("SELECT kind FROM exp_events").fetchall()])

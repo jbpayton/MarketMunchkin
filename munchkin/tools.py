@@ -742,7 +742,8 @@ class ToolRegistry:
             out = None
             if kind == "custom":
                 if not code.strip():
-                    return "custom tests need code that prints RESULT: {n, mean, hit, worst, control: {n, mean, hit}} (sandbox rules as run_analysis)"
+                    return ("custom tests need code that ends with exactly one line like: print('RESULT: ' + json.dumps({'n': 42, 'mean': 1.2, 'hit': 61.0, 'worst': -4.1, "
+                            "'control': {'n': 300, 'mean': 0.4, 'hit': 53.0}})) — mean/worst in percent at the stated horizon, hit in percent, control = the matched baseline. Sandbox rules as run_analysis.")
                 dataset = _build_dataset(symbols, "1D", bars, True, None)
                 out = SB.run(code, dataset, timeout_s=60, max_chars=9000)
             rec = run_test(lab, c.market, int(id), kind, params, c.session_id, custom_output=out)
@@ -759,7 +760,7 @@ class ToolRegistry:
             c.journal.add_event("lab", f"hypothesis #{id} {kind}: {rec['verdict']} (n={r.get('n')}, edge {round((r.get('mean') or 0) - (ctl.get('mean') or 0), 2)}pp)")
             return head + body + "\nA pass moves it to 'tested'; the operator decides on shadowing and promotion. Record what you learned with note_hypothesis."
 
-        self.add("run_hypothesis_test", "Test a specified hypothesis against history with a control. kind=event_study (dates or a spy_chg_pct condition replayed; params: dates, symbols, reference, control_chg_lte), screen_backtest (params: expr, symbols, max_symbols, years), or custom (your own sandbox code printing RESULT: {...}).",
+        self.add("run_hypothesis_test", "Test a specified hypothesis against history with a control. kind=event_study (dates or a spy_chg_pct condition replayed; params: dates, symbols, reference, control_chg_lte), screen_backtest (params: expr, symbols, max_symbols, years), or custom: your own sandbox code whose LAST line is print('RESULT: ' + json.dumps({'n':..,'mean':..,'hit':..,'worst':..,'control':{'n':..,'mean':..,'hit':..}})). A malformed RESULT is recorded as an error and does not count against the claim; fix and rerun.",
                  _schema({"id": _p("id", "integer", "hypothesis id"), "kind": _p("kind", "string", "event_study | screen_backtest | custom"), "params": _p("params", "object", "template parameters (optional)"),
                           "code": _p("code", "string", "custom only: sandbox code"), "symbols": _p("symbols", "array", "custom only: bars to preload", items={"type": "string"}), "bars": _p("bars", "integer", "custom only: daily bars per symbol")},
                          ["id", "kind"]), run_hypothesis_test)
@@ -1191,8 +1192,8 @@ class ToolRegistry:
                 return "playbook edits are disabled in this mode"
             if len(new_markdown) < 200:
                 return "ERROR: playbook replacement too short; supply the full revised document."
-            if len(new_markdown) > 9000:
-                return f"ERROR: playbook is {len(new_markdown)} chars, {len(new_markdown) - 9000} over the 9000 cap (it is injected into every prompt). Drop a whole section rather than trimming words."
+            if len(new_markdown) > 14000:
+                return f"ERROR: playbook is {len(new_markdown)} chars, {len(new_markdown) - 14000} over the 14000 cap (it is injected into every prompt). Drop a whole section rather than trimming words."
             c.journal.update_playbook(new_markdown)
             return "playbook updated (previous version archived)"
 

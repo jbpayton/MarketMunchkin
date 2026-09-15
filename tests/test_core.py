@@ -657,3 +657,30 @@ def test_uncompleted_tasks_are_deferred_then_abandoned(tmp_path):
     assert j.open_tasks(5)[0]["id"] == tid                       # but still visible as open
     assert j.touch_task(tid, 120).startswith("deferred") and j.touch_task(tid, 120) == "abandoned"
     assert j.open_tasks(5) == [] and j.touch_task(tid, 120) == "closed"
+
+
+def test_first_entry_is_capped_at_the_probe_maximum():
+    from munchkin.risk import RiskEngine, RiskState
+    from munchkin.styles import effective_limits
+    from munchkin.config import RiskLimits
+    e = RiskEngine.__new__(RiskEngine); e.L = effective_limits(RiskLimits(), "aggressive"); e.j = type("J", (), {"reserved_total": lambda self: 0.0})()
+    st = RiskState.__new__(RiskState); st.max_position_notional = 250.0; st.halted = False; st.daily_loss_breached = False; st.positions_count = 1; st.virtual_settled_cash = 400.0
+    v = e._entry_common(st, 195.0, "PNW", [])
+    assert any("probe maximum $150" in x for x in v)                    # a $195 first entry is not a probe
+    assert not any("probe" in x for x in e._entry_common(st, 140.0, "PNW", []))
+    held = [{"symbol": "PNW", "cost_basis": "140.0"}]
+    assert not any("probe" in x for x in e._entry_common(st, 100.0, "PNW", held))   # adds are governed by the cap, not the probe
+
+
+def test_lab_error_verdict_does_not_move_a_claim(tmp_path):
+    import sqlite3
+    from munchkin.lab import Lab
+    class J:
+        def __init__(self):
+            self.conn = sqlite3.connect(str(tmp_path / "lab3.db"), check_same_thread=False); self.conn.row_factory = sqlite3.Row
+    lab = Lab(J())
+    hid = lab.propose("A claim about breadth", "When fewer than 30% of names sit above their 50-day average, SPY is higher ten sessions later more often than usual.", "agent")["id"]
+    lab.specify(hid, {"trigger": {"kind": "declarative", "conditions": {"breadth_pct_above_50d": {"lte": 30}}}, "universe": ["SPY"], "side": "long", "holding": {"sessions": 10}, "expected": {"horizon": "+10d", "effect_pct": 1.0}})
+    for _ in range(3):
+        lab.record_test(hid, "custom", {}, {"error": "no RESULT line"}, "error", ["no RESULT line"])
+    assert lab.get(hid)["status"] == "specified"                          # three harness failures reject nothing

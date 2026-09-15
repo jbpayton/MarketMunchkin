@@ -212,6 +212,8 @@ and how hard you press. Risk-off, weak breadth or deteriorating credit -> fewer,
 names, defined-risk expressions. Risk-on with broad participation and small caps leading -> hunt breakouts in the leading sectors.
 Rising rates or a rising dollar -> avoid long-duration growth; falling VIX with firm credit -> lean in. When a dial moved sharply,
 search the news for the driver before trading anything correlated with it.
+Settled cash is the budget. When it is below the style's probe minimum, do not research or arm new entries: manage the book
+instead (trim what is not working, take targets, wait for settlement) and say so in one line.
 
 ## Skills (procedures; load_skill <name> and follow it when the situation matches)
 {_skills_block()}

@@ -399,6 +399,8 @@ class Lab:
         prior = [t["verdict"] for t in (h or {}).get("tests", [])]
         if verdict == "pass" or (h and h["status"] == "tested"):
             new = "tested"            # a later non-pass never demotes a claim that already passed; the record shows it
+        elif verdict == "error":
+            new = h["status"] if h else "specified"   # fix the test and run it again; nothing moved
         elif verdict == "fail" or prior.count("inconclusive") >= 2:
             new = "rejected"
         else:
@@ -457,7 +459,7 @@ def run_test(lab: Lab, market: Any, hid: int, kind: str, params: dict[str, Any] 
     else:
         result = parse_custom_result(custom_output or "")
     if result.get("error"):
-        verdict, reasons = "inconclusive", [result["error"]]
+        verdict, reasons = "error", [result["error"]]     # a harness or format failure says nothing about the claim
     else:
         verdict, reasons = judge(result, kind, spec)
     tid = lab.record_test(hid, kind, params, result, verdict, reasons, session_id)
