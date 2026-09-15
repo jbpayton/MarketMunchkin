@@ -54,6 +54,14 @@ supports tool calling (LM Studio, Ollama, vLLM, OpenRouter, OpenAI, Anthropic).
   <img src="docs/screenshots/mobile.png" width="820" alt="The same pages on a phone">
 </p>
 
+## Guardrails at a glance
+
+Every entry passes the same seven layers in the same order, and the operator's controls sit outside the agent's
+reach. The source diagram, the learning-loop diagram and a table of where each rule lives are in
+[`docs/guardrails.md`](docs/guardrails.md).
+
+![Guardrails: research gate, fixed rules, style envelope, portfolio policy, order checks, atomic reservation, protection after the fill; operator controls and degradation handling on the side](docs/guardrails.png)
+
 ## The rules that never change
 
 These hold in every style and cannot be changed from the dashboard, the prompt, or by the model. They live in
