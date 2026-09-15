@@ -72,7 +72,8 @@ function equityChart(points, w, h, base, range, colour) {
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out += `<line x1="${padL}" x2="${padL + W}" y1="${Y(v)}" y2="${Y(v)}" stroke="${grid}"/><text x="${padL + W + 6}" y="${+Y(v) + 3.5}" font-size="10" fill="${dim}" style="font-family:var(--mono)">$${v.toFixed(step < 1 ? 2 : 0)}</text>`;
   // time ticks: hourly for 1d, per day for 1w, weekly beyond. points carry ts (ISO, ET)
   const ticks = []; let lastKey = null;
-  points.forEach((p, i) => { const ts = p.ts || ''; const key = range === '1d' ? ts.slice(0, 13) : range === '1w' ? ts.slice(0, 10) : ts.slice(0, 10); if (key !== lastKey) { lastKey = key; if (range === '1d') ticks.push([i, ts.slice(11, 13) + ':00']); else if (range === '1w') ticks.push([i, ts.slice(5, 10)]); else if (new Date(ts).getDay() === 1) ticks.push([i, ts.slice(5, 10)]); } });
+  const spanDays = timed ? (t1 - t0) / 86400000 : 0; const daily = range === '1w' || spanDays <= 16;
+  points.forEach((p, i) => { const ts = p.ts || ''; const key = range === '1d' ? ts.slice(0, 13) : ts.slice(0, 10); if (key !== lastKey) { lastKey = key; if (range === '1d') ticks.push([i, ts.slice(11, 13) + ':00']); else if (daily) ticks.push([i, ts.slice(5, 10)]); else if (new Date(ts).getDay() === 1) ticks.push([i, ts.slice(5, 10)]); } });
   const maxTicks = Math.max(3, Math.floor(W / 70)); let keep = ticks.length > maxTicks ? ticks.filter((_, k) => k % Math.ceil(ticks.length / maxTicks) === 0) : ticks;
   let lastX = -1e9; keep = keep.filter(([i]) => { const x = +X(i); if (x - lastX < 46) return false; lastX = x; return true; });
   keep.forEach(([i, lab]) => { if (range === '1d' && i === 0) lab = (points[0].ts || '').slice(11, 16); out += `<line x1="${X(i)}" x2="${X(i)}" y1="${padT}" y2="${padT + H}" stroke="${grid}" stroke-dasharray="2 3"/><text x="${X(i)}" y="${h - 6}" text-anchor="middle" font-size="10" fill="${dim}" style="font-family:var(--mono)">${esc(lab)}</text>`; });
