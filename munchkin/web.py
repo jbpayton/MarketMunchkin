@@ -166,7 +166,7 @@ def api_equity(range: str = "1d"):
         last_ts = base[-1]["ts"] if base else ""
         out = base + [o for o in ours if o["ts"] > last_ts]
         return {"range": range, "points": out}
-    days = {"1w": 7, "1m": 31, "3m": 93}.get(range, 31)
+    days = {"1w": 7, "1m": 31, "3m": 93, "1y": 366, "all": 3660}.get(range, 31)
     since = (now - dt.timedelta(days=days)).isoformat()
     pts = j.equity_series(since, limit=20000)
     # thin to at most ~400 points, always keeping the last
