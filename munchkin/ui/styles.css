@@ -68,3 +68,15 @@ svg text{font-family:var(--mono)}
 .grid>.card{display:flex;flex-direction:column}
 .dot#live.on{box-shadow:0 0 0 4px color-mix(in srgb, var(--up) 35%, transparent);transition:box-shadow .2s}
 .bar[style*='display:flex'] i{position:static;height:100%;display:block;border-radius:0}
+
+/* phones: one tight header row, no repeated chrome */
+@media (max-width:900px){
+  .topbar{gap:8px}.topbar .left{gap:8px}.topbar .left .muted{display:none}.topbar .left .title{font-size:18px}
+  .topbar .right{width:100%;gap:8px;justify-content:space-between;flex-wrap:nowrap}
+  .topbar .right>span:first-child{display:none!important}  /* daemon text (inline display beats the sheet without !important) */
+  .style-label{display:none}.style-seg button{padding:6px 10px;font-size:12px}
+  .theme-seg{display:none}                                  /* theme lives on the Config tab on phones */
+  .halt{padding:6px 10px}
+  .hero-mascot{width:56px!important;height:56px!important}
+  .row .sym{font-size:18px}
+}
