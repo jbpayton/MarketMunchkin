@@ -203,7 +203,9 @@ def fomc_dates(n: int = 6) -> list[str]:
                 out.append(dt.date(year, mon, int(day_m[-1])).isoformat())
             except ValueError:
                 continue
-    return sorted(set(out))[:n]
+    today = dt.date.today().isoformat()
+    upcoming = sorted(d for d in set(out) if d >= today)     # the next n decision days, not the first n of the year
+    return upcoming[:n]
 
 
 def fed_statement(max_chars: int = 2500) -> str:
