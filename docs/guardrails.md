@@ -21,7 +21,7 @@ flowchart TD
 
     subgraph ST["3 · Style envelope — Defensive · Balanced · Aggressive  (munchkin/styles.py)"]
         direction LR
-        S1["per-position cap<br/>25% · 40% · 50%"] --- S2["positions<br/>4 · 5 · 6"] --- S3["instruments<br/>stock only · +bought options · options first"] --- S4["catalyst grade × size<br/>confirmed 1.0 · speculative · none"] --- S5["probe first<br/>$50–75 · $50–100 · $100–150"]
+        S1["per-position cap<br/>25% · 40% · 50%"] --- S2["positions<br/>4 · 5 · 6"] --- S3["instruments<br/>stock only · +bought options · options first"] --- S4["catalyst grade × size<br/>confirmed 1.0 · speculative · none"] --- S5["probe first<br/>$50–75 · $50–100 · $100–250"] --- S6["options-first (Aggressive)<br/>fast idea + contract ≤ cap → call/put, not stock"]
     end
     ST --> PP
 
@@ -89,7 +89,7 @@ flowchart LR
 |---|---|---|
 | cash only, no margin, no shorting, never writes contracts, no option into expiry | `risk.py`, `optentry.py`, `exits.py` | nobody at runtime |
 | kill switch, daily-loss breaker | `risk.py`, HALT file | operator (switch), style (threshold) |
-| position caps, positions, instruments, catalyst multipliers, probes | `styles.py` → `risk.py` | operator via style switch |
+| position caps, positions, instruments, options-first, catalyst multipliers, probes | `styles.py` → `risk.py`, `tools.py` | operator via style switch (which queues a reevaluation run) |
 | cash reserve, sector cap, slow-thesis cap, return-on-time | `styles.py` → `risk.policy_checks` | operator via style switch |
 | research gate | `research.py` | `munchkin.toml [risk]` |
 | settled cash minus reservations, per-underlying cap, liquidity, option quality | `risk.py`, `journal.reserve` | `munchkin.toml [risk]` |

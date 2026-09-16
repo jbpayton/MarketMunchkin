@@ -112,11 +112,13 @@ raises an event when a position's journaled horizon elapses, and the agent must 
 ## Trading styles
 
 Three operator-selected styles change the risk envelope, the instruments, the cadence and the agent's brief.
-The active style applies from the next run.
+The active style applies from the next run, and **switching it queues a reevaluation run** that re-judges every armed entry (keep, re-express, resize, disarm) and every position (keep, trim, exit) against the new rules; `munchkin reevaluate --reason ...` fires the same run after any rule change.
+
+Under Aggressive the engine is **options-first**: a fast directional idea (horizon of hours to a few days) on a name with a bought call or put, or a real debit vertical, at or under $250 of premium is refused as stock, and the refusal names the contract, the limit and the tool to use. Bearish views are bought puts on breakdown triggers. Stock remains for slow theses (over five trading days, capped at 40% of the book) and for names whose contracts cost more than the cap. The agent's own playbook may add caution to an instrument but can never ban one the style allows. Since at-the-money options on $200 to $400 stocks cost $300 to $1,500 a contract, the board is steered to liquid underlyings priced roughly $15 to $120, where one contract fits.
 
 | | Defensive | Balanced (default) | Aggressive |
 |---|---|---|---|
-| instruments | stock only | stock, bought calls/puts, debit verticals | bought calls/puts first for fast setups; verticals when IV is rich |
+| instruments | stock only | stock, bought calls/puts, debit verticals | **options-first, enforced**: a fast idea with a qualifying contract is refused as stock and handed the call, put or debit vertical to buy |
 | probes | $50–75 | $50–100 | $100–250 |
 | per position / positions | 25% / 4 | 40% / 5 | 50% / 6 |
 | catalyst grades | confirmed only | speculative ×0.5, unexplained ×0.35 | speculative ×0.75, unexplained ×0.5 |
@@ -290,6 +292,7 @@ munchkin plan | munchkin playbook
 munchkin screener refresh | backtest --years 3 | earnings | regime | intraday --setups
 munchkin screener query "rsi14 < 30 and avg_dollar_vol20_m > 50" --sort rsi14 --asc
 munchkin skills [--show NAME] [--approve NAME] [--enable NAME] [--disable NAME]   # installed skills
+munchkin reevaluate --reason "..."                 # re-judge every arm and position against the rules now in force
 munchkin telegram                                  # the command-channel poller (runs as the munchkin-telegram service)
 munchkin notify "text" [--kind fills]              # test a push to the paired chats
 munchkin halt | munchkin halt --resume             # block new entries; exits keep working
