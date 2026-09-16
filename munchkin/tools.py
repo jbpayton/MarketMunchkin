@@ -1305,7 +1305,8 @@ class ToolRegistry:
         def arm_entry(symbol: str, direction: str, trigger_price: float, notional: float, stop_price: float, target_price: float,
                       thesis: str, catalyst_grade: str, horizon: str, expires_hours: float = 30.0, max_chase_pct: float = 1.0,
                       not_before: str | None = None, spy_min_chg_pct: float | None = None, expression: str = "stock",
-                      dte_target: int = 14, opt_stop_pct: float = 0.5, opt_target_pct: float = 1.0, depends_on: str = "", invalidated_by: str = "") -> str:
+                      dte_target: int = 14, opt_stop_pct: float = 0.5, opt_target_pct: float = 1.0, depends_on: str = "", invalidated_by: str = "",
+                      spy_max_chg_pct: float | None = None) -> str:
             gate = self._trading_gate()
             if gate:
                 return gate
@@ -1386,13 +1387,13 @@ class ToolRegistry:
             if c.dry_run:
                 return f"DRY RUN: would arm {u} buy ${float(notional):.0f} when price {direction} {trg} (stop {sp}, target {tp}, not before {nb}, spy>= {spy_min_chg_pct})"
             rec = EB.arm(u, direction, trg, float(notional), sp, tp, thesis, grade, horizon, expires_hours, c.session_id, max_chase_pct, nb, spy_min_chg_pct,
-                         expression, int(dte_target), float(opt_stop_pct), float(opt_target_pct))
+                         expression, int(dte_target), float(opt_stop_pct), float(opt_target_pct), spy_max_chg_pct=spy_max_chg_pct)
             c.journal.add_decision(c.session_id, "arm", u, side="buy", qty=float(notional), price=trg, thesis=thesis, target=str(tp), stop=str(sp),
                                    horizon=horizon, status="armed", meta={"catalyst_grade": grade, "direction": direction, "expires": rec["expires"], "reach": reach.strip(), "depends_on": depends_on.strip()[:160], "invalidated_by": invalidated_by.strip()[:200]}, underlying=u)
             if depends_on.strip() or invalidated_by.strip():
                 rec["depends_on"], rec["invalidated_by"] = depends_on.strip()[:160], invalidated_by.strip()[:200]
                 c.journal.set("entries:" + u, rec)
-            cond = (f", not before {nb[:16]}" if nb else "") + (f", only if SPY today >= {spy_min_chg_pct}%" if spy_min_chg_pct is not None else "")
+            cond = (f", not before {nb[:16]}" if nb else "") + (f", only if SPY today >= {spy_min_chg_pct}%" if spy_min_chg_pct is not None else "") + (f", only if SPY today <= {spy_max_chg_pct}%" if spy_max_chg_pct is not None else "")
             ex = ""
             if expression != "stock":
                 ex = f" as {expression} (~{dte_target} DTE, resolved at fire time; position stop {int(opt_stop_pct*100)}% of premium, target +{int(opt_target_pct*100)}%)"
@@ -1422,7 +1423,7 @@ class ToolRegistry:
                           "expression": _p("expression", "string", "stock (default) | call | put | call_spread | put_spread"),
                           "dte_target": _p("dte_target", "integer", "target days to expiry for option expressions (7-60, default 14)"),
                           "opt_stop_pct": _p("opt_stop_pct", "number", "option position stop as a fraction of premium paid (default 0.5)"),
-                          "opt_target_pct": _p("opt_target_pct", "number", "option first target as a fraction gain on premium (default 1.0 = +100%)"), "depends_on": _p("depends_on", "string", "the driver or theme this thesis expresses (e.g. oil shock, FOMC hold, AI data-center power, sector: Utilities)"), "invalidated_by": _p("invalidated_by", "string", "what breaks it: a dial flip, a calendar outcome, a headline type")},
+                          "opt_target_pct": _p("opt_target_pct", "number", "option first target as a fraction gain on premium (default 1.0 = +100%)"), "depends_on": _p("depends_on", "string", "the driver or theme this thesis expresses (e.g. oil shock, FOMC hold, AI data-center power, sector: Utilities)"), "invalidated_by": _p("invalidated_by", "string", "what breaks it: a dial flip, a calendar outcome, a headline type"), "spy_max_chg_pct": _p("spy_max_chg_pct", "number", "bearish tape filter: fire only if SPY today <= this percent (e.g. -0.4 for a put on a breakdown)")},
                          ["symbol", "direction", "trigger_price", "notional", "stop_price", "target_price", "thesis", "catalyst_grade", "horizon"]), arm_entry)
 
         def list_entries() -> str:

@@ -88,6 +88,21 @@ or two skills and library notes that matter today (a print tomorrow, an option n
 into the prompt in full, so reading them costs nothing. The plan is rewritten only when it changes; a thesis that buys
 into a sector the tape has been punishing is asked to say why.
 
+## Responsiveness: the watcher acts, the model decides a short list
+
+The model is the slow part (a run is minutes), so responsiveness lives in the mechanical layer:
+
+- **Signals wake the agent with the trade pre-resolved.** The intraday experiment's detector finds bullish and bearish
+  opening-range breakouts within a minute; each new one becomes an event carrying the qualifying call, put or debit
+  vertical and its limit, so the event run's whole job is yes or no on that contract.
+- **Working option orders are managed.** A resting option buy limit is re-priced toward the ask at five and ten
+  minutes (capped at the ask plus 1% and the original limit plus 3%), then cancelled at fifteen.
+- **Housekeeping never sits in front of a live move**: no chores in the last 90 minutes, or within 30 minutes of an
+  index move, a dial flip or a signal.
+- **Both branches are armed before a scheduled print**: in the hour before a data release or an FOMC decision, a
+  bullish option arm (fires only if SPY is up 0.4%) and a bearish one (`spy_max_chg_pct`, fires only if SPY is down
+  0.4%), both a few minutes after the release, so the watcher executes the reaction instead of the model deciding after it.
+
 ## Portfolio policy and book state
 
 Caps per position were never enough: the book could end fully invested in slow, low-beta names under an aggressive

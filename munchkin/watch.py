@@ -157,6 +157,63 @@ class Watcher:
         self.last_news_check = now_et()
         return events
 
+    def check_option_orders(self, open_orders: list[dict[str, Any]]) -> list[str]:
+        """A resting option BUY limit is re-priced toward the ask at 5 and 10 minutes (capped at ask + 1% and the original limit
+        + 3%), then cancelled at 15: a decision becomes a fill or a clean no, never a stale order into the close."""
+        actions: list[str] = []
+        now = now_et()
+        for o in open_orders:
+            sym = str(o.get("symbol") or "")
+            if not is_option(sym) or str(o.get("side")) != "buy" or str(o.get("type") or "").lower() != "limit" or not o.get("limit_price"):
+                continue
+            key = "optwork:" + sym
+            st = self.j.get(key) or {}
+            if not st:
+                st = {"orig_limit": float(o["limit_price"]), "first_ts": now.isoformat(timespec="seconds"), "reprices": 0, "order_id": o["id"]}
+                self.j.set(key, st)
+                continue
+            try:
+                age = (now - dt.datetime.fromisoformat(st["first_ts"])).total_seconds() / 60
+            except Exception:
+                age = 0.0
+            limit = float(o["limit_price"]); orig = float(st["orig_limit"]); qty = int(float(o.get("qty") or 1))
+            try:
+                snap = self.m.option_snapshots([sym])[0]
+                ask = float(snap.get("ask") or 0)
+            except Exception:
+                ask = 0.0
+            if age >= 15:
+                try:
+                    self.b.cancel_order(o["id"])
+                    self.j.add_decision(None, "cancel", sym, side="buy", qty=qty, price=limit, order_id=o["id"], status="canceled",
+                                        meta={"reason": f"option buy unfilled after {age:.0f} min (ask {ask or '?'} vs limit {limit}); the setup is stale", "mechanical": True}, underlying=parse_occ(sym)["underlying"])
+                    self.j.set(key, None)
+                    actions.append(f"{occ_human(sym)}: buy limit {limit} cancelled after {age:.0f} min unfilled (ask {ask or '?'})")
+                except Exception as e:
+                    actions.append(f"{occ_human(sym)}: cancel FAILED: {str(e)[:80]}")
+                continue
+            step = 1 if age >= 5 and st["reprices"] == 0 else 2 if age >= 10 and st["reprices"] == 1 else 0
+            if not step or not ask or ask <= limit:
+                continue
+            new = round(min(ask, orig * 1.02), 2) if step == 1 else round(min(ask * 1.01, orig * 1.03), 2)
+            if new <= limit:
+                continue
+            try:
+                self.b.cancel_order(o["id"])
+                r = self.b.submit_option_order(sym, "buy", qty, new, "buy_to_open")
+                st.update({"reprices": step, "order_id": r.get("id")})
+                self.j.set(key, st)
+                self.j.add_decision(None, "reprice", sym, side="buy", qty=qty, price=new, order_id=r.get("id"), status=r.get("status", "submitted"),
+                                    meta={"reason": f"re-priced from {limit} toward the ask {ask} at {age:.0f} min", "mechanical": True, "from": limit}, underlying=parse_occ(sym)["underlying"])
+                actions.append(f"{occ_human(sym)}: buy limit re-priced {limit} -> {new} (ask {ask}, {age:.0f} min)")
+            except Exception as e:
+                actions.append(f"{occ_human(sym)}: re-price FAILED: {str(e)[:80]}")
+        live = {str(o.get("symbol")) for o in open_orders}
+        for k in list(self.j.all_kv_keys("optwork:") if hasattr(self.j, "all_kv_keys") else []):
+            if k[8:] not in live:
+                self.j.set(k, None)
+        return actions
+
     def check_world(self, positions: list[dict[str, Any]]) -> list[str]:
         """Hourly: a cross-asset dial changing sign, or a fresh headline on a theme a position depends on, wakes the agent
         for exactly the positions that declared the dependency."""
@@ -423,6 +480,11 @@ class Watcher:
                 actions += self.x.ensure(positions, open_orders)
             except Exception as e:
                 log.warning("watch ensure exits: %s", e)
+        if market_open:
+            try:
+                actions += self.check_option_orders(open_orders)
+            except Exception as e:
+                log.warning("watch option orders: %s", e)
         try:
             ev, ac = self.check_expiry(positions)
             events += ev

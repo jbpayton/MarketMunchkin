@@ -92,6 +92,9 @@ class Journal:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         self.conn.commit()
 
+    def all_kv_keys(self, prefix: str) -> list[str]:
+        return [r[0] for r in self.conn.execute("SELECT key FROM kv WHERE key LIKE ? AND value IS NOT NULL AND value != 'null'", (prefix + "%",)).fetchall()]
+
     # ------------------------------------------------------------------ reservations (cash holds)
     def reserve(self, key: str, amount: float, available: float, ttl_s: int = 180, note: str = "") -> tuple[bool, float]:
         """Atomically hold `amount` of cash if it fits in `available` minus the other live holds. Serialised with an

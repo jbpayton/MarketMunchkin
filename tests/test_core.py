@@ -820,3 +820,71 @@ def test_probe_minimum_is_enforced_when_cash_allows():
     assert any("probe minimum $100" in x for x in e._entry_common(st, 50.0, "AEE", [], horizon="hours"))
     st.virtual_settled_cash = 140.0                                                              # deployable $40: a $40 probe is all there is
     assert not any("probe minimum" in x for x in e._entry_common(st, 40.0, "AEE", [], horizon="hours"))
+
+
+def test_bearish_tape_filter_on_arms():
+    from munchkin.entries import index_ok
+    assert index_ok({"spy_max_chg_pct": -0.4}, -0.6) and not index_ok({"spy_max_chg_pct": -0.4}, 0.1)
+    assert index_ok({"spy_min_chg_pct": 0.4}, 0.5) and not index_ok({"spy_min_chg_pct": 0.4}, -0.6)
+    assert index_ok({}, None) and not index_ok({"spy_max_chg_pct": -0.4}, None)
+
+
+def test_working_option_buy_is_repriced_then_cancelled(monkeypatch):
+    import datetime as dt
+    from munchkin import watch as W
+    from munchkin.watch import Watcher
+    class J:
+        def __init__(self): self.kv, self.decisions = {}, []
+        def get(self, k, d=None): return self.kv.get(k, d)
+        def set(self, k, v): self.kv[k] = v
+        def add_decision(self, *a, **k): self.decisions.append((a, k))
+        def all_kv_keys(self, p): return [k for k, v in self.kv.items() if k.startswith(p) and v]
+    class B:
+        def __init__(self): self.cancelled, self.submitted = [], []
+        def cancel_order(self, oid): self.cancelled.append(oid)
+        def submit_option_order(self, sym, side, qty, limit, intent, client_order_id=None): self.submitted.append((sym, side, qty, limit, intent)); return {"id": f"o{len(self.submitted)}", "status": "accepted"}
+    class M:
+        def option_snapshots(self, syms): return [{"symbol": syms[0], "bid": 1.26, "ask": 1.32}]
+    j, b = J(), B()
+    w = Watcher.__new__(Watcher); w.j, w.b, w.m = j, b, M()
+    order = {"id": "o0", "symbol": "VTRS261016C00016000", "side": "buy", "type": "limit", "limit_price": "1.28", "qty": "1"}
+    t0 = dt.datetime(2026, 9, 16, 14, 59, tzinfo=W.ET) if hasattr(W, "ET") else None
+    from munchkin.util import ET
+    t0 = dt.datetime(2026, 9, 16, 14, 59, tzinfo=ET)
+    monkeypatch.setattr(W, "now_et", lambda: t0)
+    assert w.check_option_orders([order]) == [] and j.kv["optwork:VTRS261016C00016000"]["orig_limit"] == 1.28
+    monkeypatch.setattr(W, "now_et", lambda: t0 + dt.timedelta(minutes=5))
+    acts = w.check_option_orders([order])
+    assert b.cancelled == ["o0"] and b.submitted[0][3] == 1.31 and "re-priced 1.28 -> 1.31" in acts[0]     # min(ask 1.32, 1.28 x 1.02 = 1.3056) -> 1.31
+    order2 = {**order, "id": "o1", "limit_price": "1.31"}
+    monkeypatch.setattr(W, "now_et", lambda: t0 + dt.timedelta(minutes=10))
+    acts = w.check_option_orders([order2])
+    assert b.submitted[1][3] == 1.32 and j.kv["optwork:VTRS261016C00016000"]["reprices"] == 2                  # min(ask x 1.01 = 1.3332, orig x 1.03 = 1.3184) -> 1.32
+    order3 = {**order, "id": "o2", "limit_price": "1.32"}
+    monkeypatch.setattr(W, "now_et", lambda: t0 + dt.timedelta(minutes=15))
+    acts = w.check_option_orders([order3])
+    assert "cancelled after 15 min" in acts[0] and j.kv.get("optwork:VTRS261016C00016000") is None and any(a[0][1] == "cancel" for a in j.decisions)
+    assert w.check_option_orders([{**order, "side": "sell"}]) == []                                          # sells (exits) are never touched
+
+
+def test_signal_wake_text_offers_the_contract_or_the_reason(tmp_path):
+    import sqlite3
+    from munchkin.experiments import ExperimentStore, ExperimentConfig, signal_wake_text
+    from munchkin.styles import effective_limits
+    from munchkin.config import RiskLimits, Settings
+    class J:
+        def __init__(self):
+            self.conn = sqlite3.connect(str(tmp_path / "sw.db"), check_same_thread=False); self.conn.row_factory = sqlite3.Row
+    st = ExperimentStore(J()); exp = st.register(ExperimentConfig())
+    sid = st.add_signal(exp["id"], "k", "LRCX", "bearish", "2026-09-16T15:40:00-04:00", "2026-09-16T15:40:05-04:00", "2026-09-16T15:40:00-04:00", {"relvol": 1.53, "rs_pct": -2.49, "extension_pct": 0.99, "edge": 90.0}, {})
+    class Ctx: pass
+    ctx = Ctx(); ctx.settings = Settings(risk=effective_limits(RiskLimits(), "aggressive"))
+    class B:
+        def option_contracts(self, u, a, b, t, limit=2000): return [{"symbol": "LRCX260925P00090000", "open_interest": 900}]
+    class M:
+        def option_chain(self, u, a, b, m, t, oi_map=None): return [{"symbol": "LRCX260925P00090000", "exp": "2026-09-25", "dte": 9, "delta": -0.48, "bid": 1.80, "ask": 1.95, "type": "put", "strike": 90.0}]
+    ctx.broker, ctx.market = B(), M()
+    text = signal_wake_text(st, ctx, sid)
+    assert text.startswith("SIGNAL: LRCX bearish opening-range breakout at 15:40") and "expression ready: buy LRCX260925P00090000" in text and "buy_option(" in text
+    ctx.settings = Settings(risk=effective_limits(RiskLimits(), "defensive"))
+    assert "not expressible under this style" in signal_wake_text(st, ctx, sid)

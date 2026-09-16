@@ -34,10 +34,12 @@ def not_yet(rec: dict[str, Any], now: dt.datetime) -> bool:
 
 
 def index_ok(rec: dict[str, Any], spy_chg_pct: float | None) -> bool:
-    thr = rec.get("spy_min_chg_pct")
-    if thr is None:
+    lo, hi = rec.get("spy_min_chg_pct"), rec.get("spy_max_chg_pct")
+    if lo is None and hi is None:
         return True
-    return spy_chg_pct is not None and spy_chg_pct >= float(thr)
+    if spy_chg_pct is None:
+        return False
+    return (lo is None or spy_chg_pct >= float(lo)) and (hi is None or spy_chg_pct <= float(hi))
 
 
 def expired(rec: dict[str, Any], now: dt.datetime) -> bool:
@@ -69,12 +71,13 @@ class EntryBook:
     def arm(self, symbol: str, direction: str, trigger_price: float, notional: float, stop_price: float, target_price: float,
             thesis: str, catalyst_grade: str, horizon: str, expires_hours: float | None, session_id: int | None,
             max_chase_pct: float = 1.0, not_before: str | None = None, spy_min_chg_pct: float | None = None,
-            expression: str = "stock", dte_target: int = 14, opt_stop_pct: float = 0.5, opt_target_pct: float = 1.0) -> dict[str, Any]:
+            expression: str = "stock", dte_target: int = 14, opt_stop_pct: float = 0.5, opt_target_pct: float = 1.0,
+            spy_max_chg_pct: float | None = None) -> dict[str, Any]:
         rec = {"symbol": symbol.upper(), "direction": "below" if direction == "below" else "above", "trigger_price": float(trigger_price),
                "notional": round(float(notional), 2), "stop_price": float(stop_price), "target_price": float(target_price),
                "thesis": thesis, "catalyst_grade": catalyst_grade, "horizon": horizon, "session_id": session_id,
                "armed_at": now_et().isoformat(timespec="seconds"), "max_chase_pct": max_chase_pct,
-               "not_before": not_before, "spy_min_chg_pct": spy_min_chg_pct,
+               "not_before": not_before, "spy_min_chg_pct": spy_min_chg_pct, "spy_max_chg_pct": spy_max_chg_pct,
                "expression": expression, "dte_target": int(dte_target), "opt_stop_pct": opt_stop_pct, "opt_target_pct": opt_target_pct,
                "expires": (now_et() + dt.timedelta(hours=expires_hours)).isoformat(timespec="seconds") if expires_hours else None}
         self.j.set(KEY + rec["symbol"], rec)

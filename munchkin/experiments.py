@@ -597,6 +597,7 @@ class ExperimentRunner:
         self.chain_fn = chain_fn   # (underlying) -> list of contract rows with bid/ask/delta/dte/spread_pct/quote_age_s/multiplier/type
         self.counters: dict[str, int] = {}
         self._last_fetch: dt.datetime | None = None
+        self.last_new_signal_ids: list[int] = []
         self._last_heartbeat: dt.datetime | None = None
         self._bars_cache: pd.DataFrame | None = None
 
@@ -665,6 +666,7 @@ class ExperimentRunner:
         for k, v in counters.items():
             self._bump(k, v)
         self._heartbeat(now, f"universe {len(syms)}, bars {len(bars)} rows, candidates {len(cands)}")
+        self.last_new_signal_ids = []
         n = 0
         receipt = now.isoformat(timespec="seconds")
         for c in cands:
@@ -675,6 +677,7 @@ class ExperimentRunner:
                 self._bump("duplicate")
                 continue
             n += 1
+            self.last_new_signal_ids.append(sid)
             q = self._quote(c["symbol"])
             self.store.add_quote(sid, c["symbol"], "decision", q)
             px = q.get("price") if q.get("fresh") else None
@@ -980,3 +983,42 @@ class ExperimentRunner:
         out["data_quality"] = {"options_feed": "indicative (delayed); variant C fills are exploratory, not executable validation", "bars_feed": "IEX real-time 5-minute completed bars",
                                "relvol_basis": "IEX volume vs IEX history at the same time of day", "poll_cadence_s": 30}
         return out
+
+
+# ---------------------------------------------------------------- signals as wake events for the agent
+def signal_wake_text(store: "ExperimentStore", ctx: Any, sid: int) -> str | None:
+    """One line the agent can act on in a single event run: the mechanical breakout plus the contract that expresses it
+    under the current style (or the reason none does). Bearish signals are offered only where puts are allowed."""
+    sig = store.signal(sid)
+    if not sig:
+        return None
+    L = ctx.settings.risk
+    f = sig["features"]
+    head = (f"SIGNAL: {sig['symbol']} {sig['direction']} opening-range breakout at {sig['bar_end'][11:16]} (relvol {f.get('relvol')}x, RS vs SPY {(f.get('rs_pct') or 0):+.2f}, "
+            f"{f.get('extension_pct')}% past the range edge {f.get('edge')})")
+    if not (L.allow_options and L.allow_singles):
+        return head + (": stock probe if it clears the gate" if sig["direction"] == "bullish" else ": bearish, not expressible under this style")
+    try:
+        from .optentry import resolve_affordable
+        ctype = "put" if sig["direction"] == "bearish" else "call"
+        today = now_et().date()
+        dte_min, dte_max = max(int(L.min_option_dte) + 1, 5), 30
+        contracts = ctx.broker.option_contracts(sig["symbol"], today + dt.timedelta(days=dte_min), today + dt.timedelta(days=dte_max), ctype, limit=2000)
+        rows = ctx.market.option_chain(sig["symbol"], dte_min, dte_max, 10.0, ctype, oi_map={k["symbol"]: k for k in contracts}) if contracts else []
+        budget = float(getattr(L, "options_first_max_premium", 150.0) or 150.0)
+        legs, limit, note = resolve_affordable(rows, ctype, budget, 14, dte_min)
+        if legs and (limit * 100 < 40 or abs(float(legs[0][0].get("delta") or 0)) < 0.35):
+            legs = []
+        if not legs and L.allow_spreads:
+            legs, limit, note = resolve_affordable(rows, ctype + "_spread", budget, 14, dte_min)
+            if legs and len(legs) == 2:
+                k1, k2 = float(legs[0][0].get("strike") or 0), float(legs[1][0].get("strike") or 0)
+                if not k1 or abs(k2 - k1) / k1 < 0.015 or limit * 100 < 40:
+                    legs = []
+        if not legs:
+            return head + f" — no {ctype} under ${budget:.0f} of premium ({note}); decide whether it is worth anything else"
+        desc = " / ".join(f"{side} {r['symbol']} (δ {r['delta']}, {r['bid']}/{r['ask']})" for r, side in legs)
+        tool = f"buy_option('{legs[0][0]['symbol']}', 1, {limit:.2f}, ...)" if len(legs) == 1 else f"open_spread(..., net_debit={limit:.2f})"
+        return head + f" — expression ready: {desc} at ~${limit:.2f} = ${limit * 100:.0f} of premium (max loss). Yes/no: {tool}"
+    except Exception as e:
+        return head + f" — contract lookup failed ({str(e)[:60]})"

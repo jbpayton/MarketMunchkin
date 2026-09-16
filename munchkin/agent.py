@@ -76,7 +76,9 @@ PHASE_INSTRUCTIONS = {
     "event": (
         "EVENT session: the watcher woke you for the reason(s) in the operator task. Lead with the DECISION for each held or armed "
         "name the trigger touches (hold / trail stop / trim / exit / add / disarm) and act on it; the world picture comes after, in "
-        "two lines, only if it changed (add_development). No general scan. Finish with set_plan only if the plan changed."),
+        "two lines, only if it changed (add_development). No general scan. A SIGNAL event is a mechanical breakout with its contract already "
+        "resolved: ground it (research_symbol gives the chart and news in one call), decide yes or no on THAT contract within six tool calls, "
+        "and buy_option / open_spread or say why not in one line. Finish with set_plan only if the plan changed."),
 }
 
 

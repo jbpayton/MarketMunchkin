@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import re
 import time
 from typing import Optional
 
@@ -151,6 +152,16 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                                                   chain_fn=lambda u: ectx.market.option_chain(u, 5, 30, 40.0, None))
                     runner.universe, runner.dollar_volume = universe, dollar_vol
                     res = runner.tick()
+                    for sid in list(getattr(runner, "last_new_signal_ids", []))[:3]:
+                        try:
+                            from .experiments import signal_wake_text
+                            text = signal_wake_text(store, ectx, sid)
+                            if text:
+                                ectx.journal.add_event("event", text)
+                                wq.put(("event", text))
+                                TG.notify(text, kind="events")
+                        except Exception as e:
+                            logging.warning("signal wake failed: %s", e)
                     if res.get("new_signals") or res.get("fills") or res.get("exits"):
                         logging.info("experiment tick: %s", {k: res[k] for k in ("new_signals", "classified", "fills", "exits")})
                         ectx.journal.add_event("experiment", f"{exp['name']} v{exp['version']}: {res['new_signals']} signals, {res['classified']} classified, {res['fills']} shadow fills, {res['exits']} exits")
@@ -258,6 +269,51 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                         + ("Run the matching test." if status == "specified" else "Write the spec, then run the matching test."))
         return None
 
+    def _chores_quiet(now: dt.datetime) -> bool:
+        """Housekeeping never runs in the last 90 minutes, nor within 30 minutes of an index move, a dial flip or a signal."""
+        if now.time() >= dt.time(14, 30):
+            return True
+        since = (now - dt.timedelta(minutes=30)).isoformat(timespec="seconds")
+        row = j.conn.execute("SELECT COUNT(*) FROM events WHERE ts >= ? AND kind='event' AND (text LIKE 'DIAL FLIP%' OR text LIKE 'MOVE:%' OR text LIKE 'SIGNAL:%')", (since,)).fetchone()
+        return bool(row and row[0])
+
+    def _preprint_duty(now: dt.datetime) -> str | None:
+        """Within the hour before a scheduled print or FOMC decision: arm both branches as options with tape filters."""
+        try:
+            from . import macro as M
+            L = ctx.settings.risk
+            if not (L.allow_options and L.allow_singles):
+                return None
+            key = "duty:preprint:" + now.date().isoformat()
+            if j.get(key):
+                return None
+            soon = []
+            for line in (M.bls_schedule(2) or "").splitlines():
+                m = re.match(r"(\d{4}-\d{2}-\d{2})\s+\S*\s*(\d{1,2}):(\d{2})\s*(AM|PM)?\s*ET:?\s*(.*)", line.strip())
+                if m and m.group(1) == now.date().isoformat():
+                    hh, mm = int(m.group(2)), int(m.group(3))
+                    if (m.group(4) or "").upper() == "PM" and hh < 12:
+                        hh += 12
+                    t = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                    if 0 < (t - now).total_seconds() <= 3600:
+                        soon.append((t, m.group(5).strip()))
+            if now.date().isoformat() in M.fomc_dates(2):
+                t = now.replace(hour=14, minute=0, second=0, microsecond=0)
+                if 0 < (t - now).total_seconds() <= 3600:
+                    soon.append((t, "FOMC decision"))
+            if not soon:
+                return None
+            t, what = sorted(soon)[0]
+            j.set(key, t.isoformat(timespec="seconds"))
+            after = (t + dt.timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M")
+            return (f"DUTY: PRE-PRINT ({what} at {t:%H:%M}). Arm BOTH branches as options so the watcher fires within a minute of the reaction instead of you "
+                    f"deciding after it: one bullish arm (expression call or call_spread, direction above a breakout level, spy_min_chg_pct 0.4) and one "
+                    f"bearish arm (expression put or put_spread, direction below a breakdown level, spy_max_chg_pct -0.4), both not_before {after}, each "
+                    f"sized to one contract within the premium cap, on liquid underlyings that express the branch (index proxies count). Then stop; no other entries before the print.")
+        except Exception as e:
+            logging.warning("pre-print duty failed: %s", e)
+            return None
+
     def _rotation_task() -> str:
         """State-aware duty for a run with no event and an empty queue. The opportunity board is the default;
         housekeeping items run only when they are actually stale."""
@@ -296,13 +352,17 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                         "its thesis changed; take targets; note which position you would cut first if a better setup appeared. No new entries or arms.")
         except Exception as e:
             logging.warning("book state for duty selection failed: %s", e)
-        if age_h("duty:brief_verified") > 3 and age_h("world_brief_ts") > 3:
+        pp = _preprint_duty(now)
+        if pp:
+            return pp
+        quiet = _chores_quiet(now)
+        if not quiet and age_h("duty:brief_verified") > 3 and age_h("world_brief_ts") > 3:
             j.set("duty:brief_verified", now.isoformat(timespec="seconds"))
             return "DUTY: re-verify every number in the world brief with get_macro_data / get_macro_release; rewrite it with sources. Then do the opportunity board."
-        if age_h("duty:grade") > 2 and j.fills(since=now - dt.timedelta(hours=6)):
+        if not quiet and age_h("duty:grade") > 2 and j.fills(since=now - dt.timedelta(hours=6)):
             j.set("duty:grade", now.isoformat(timespec="seconds"))
             return "DUTY: grade the decisions behind the last fills against what happened; record at most one rule-style lesson. Then do the opportunity board."
-        if age_h("duty:new_dossiers") > 1.5:
+        if not quiet and age_h("duty:new_dossiers") > 1.5:
             j.set("duty:new_dossiers", now.isoformat(timespec="seconds"))
             return "DUTY: find 2 NEW names (not in today's dossiers) from get_setups / get_intraday_setups / movers that fit the regime; research_symbol each; then do the opportunity board including them."
         if age_h("duty:board") > 0.5:

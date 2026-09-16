@@ -10,7 +10,7 @@ Use when the calendar (get_economic_calendar, the Brain's "next events") shows C
 ## The evening before / pre-market
 1. Get the facts: consensus and prior for headline and core (web_search "<print> consensus <month>", prefer Reuters/Bloomberg/BLS). Write them into the world brief with the source.
 2. Decide the base case in one line (hot / in line / cool) and what each does to rates, the dollar and the index. Note which held names are most and least sensitive (run the event study below if you have not this week).
-3. Every armed entry that could fire around the print needs `not_before` set to at least 5 minutes after the release and a `spy_min_chg_pct` tape filter. Disarm anything whose thesis is the print itself unless the trigger already encodes the outcome.
+3. In the hour before the print, arm BOTH branches as options so the watcher fires within a minute of the reaction: a bullish arm (call or call spread, `direction above` a breakout level, `spy_min_chg_pct` +0.4) and a bearish arm (put or put spread, `direction below` a breakdown level, `spy_max_chg_pct` −0.4), both `not_before` five minutes after the release, each one contract within the premium cap. The branch that does not fire expires. Disarm anything else whose thesis is the print itself.
 4. Do not add exposure in the last 30 minutes before a print. Existing stops stay; do not widen them.
 
 ## At the release (first 15 minutes)
