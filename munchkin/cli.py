@@ -579,7 +579,7 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                     picks = KnowledgeBase().next_topics(3)
                     _run("study", "STUDY: pick ONE topic — " + "; ".join(f"{p['title']} [{p['slug']}; {p['why']}; last studied {p['last'][:10]}]" for p in picks)
                          + " — or a gap you noticed in recent sessions. Budget: at most 6 searches and 4 page fetches. Finish with save_knowledge.")
-                elif _lab_done_tonight() < SETTINGS.lab.lab_Runs_per_night and _lab_task():
+                elif _lab_done_tonight() < SETTINGS.lab.lab_sessions_per_night and _lab_task():
                     _run("lab", _lab_task())
                 elif _in_offhours(now, is_td) and j.sessions_today("reflect") < W.max_reflect_per_day:
                     _run("reflect", None)
