@@ -666,8 +666,8 @@ def test_first_entry_is_capped_at_the_probe_maximum():
     from munchkin.config import RiskLimits
     e = RiskEngine.__new__(RiskEngine); e.L = effective_limits(RiskLimits(), "aggressive"); e.j = type("J", (), {"reserved_total": lambda self: 0.0})()
     st = RiskState.__new__(RiskState); st.max_position_notional = 250.0; st.halted = False; st.daily_loss_breached = False; st.positions_count = 1; st.virtual_settled_cash = 400.0
-    v = e._entry_common(st, 195.0, "PNW", [])
-    assert any("probe maximum $150" in x for x in v)                    # a $195 first entry is not a probe
+    v = e._entry_common(st, 295.0, "PNW", [])
+    assert any("probe maximum $250" in x for x in v)                    # a $295 first entry is not a probe
     assert not any("probe" in x for x in e._entry_common(st, 140.0, "PNW", []))
     held = [{"symbol": "PNW", "cost_basis": "140.0"}]
     assert not any("probe" in x for x in e._entry_common(st, 100.0, "PNW", held))   # adds are governed by the cap, not the probe

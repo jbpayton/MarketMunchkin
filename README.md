@@ -101,7 +101,7 @@ sector, beta, horizon, age and progress, concentration and style-fit flags, and 
 | sector cap | 50% | 50% | 50% |
 | capital in slow theses (> 5 Runs) | no cap | 60% | 40% |
 | return-on-time bar for stock entries | none | 2% | 3% |
-| first entry into a name (probe) | $50–75 | $50–100 | $100–150 |
+| first entry into a name (probe) | $50–75 | $50–100 | $100–250 |
 
 The return-on-time bar is the daily ATR times the square root of the holding days: a stock position has to be able to
 pay for its holding period, or it is expressed as an option, which is what the aggressive style is for. Duties follow
@@ -117,7 +117,7 @@ The active style applies from the next run.
 | | Defensive | Balanced (default) | Aggressive |
 |---|---|---|---|
 | instruments | stock only | stock, bought calls/puts, debit verticals | bought calls/puts first for fast setups; verticals when IV is rich |
-| probes | $50–75 | $50–100 | $100–150 |
+| probes | $50–75 | $50–100 | $100–250 |
 | per position / positions | 25% / 4 | 40% / 5 | 50% / 6 |
 | catalyst grades | confirmed only | speculative ×0.5, unexplained ×0.35 | speculative ×0.75, unexplained ×0.5 |
 | options budget | 0% | 60% of equity | 75% of equity |
