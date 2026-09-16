@@ -52,14 +52,18 @@ STYLES: dict[str, dict[str, Any]] = {
         "risk": {"max_position_pct": 0.50, "max_positions": 6, "max_options_pct": 0.75, "max_daily_loss_pct": 0.20,
                  "size_mult_speculative": 0.75, "size_mult_no_catalyst": 0.5, "allow_options": True, "allow_spreads": True,
                  "allow_singles": True, "probe_min": 100, "probe_max": 150, "research_min_charts": 4,
-                 "min_cash_pct": 0.20, "max_sector_pct": 0.50, "max_slow_pct": 0.40, "min_expected_move_pct": 3.0},
+                 "min_cash_pct": 0.20, "max_sector_pct": 0.50, "max_slow_pct": 0.40, "min_expected_move_pct": 3.0, "options_first": True},
         "watch": {"min_gap_seconds": 60, "position_move_pct": 2.5},
         "reasoning": "medium",
         "summary": ["bought calls and puts preferred for fast setups; verticals when IV is rich", "$100–150 probes, 50% per position, 6 positions max",
                     "speculative catalysts at 0.75, unexplained moves at 0.5", "tighter stops, faster exits (+60–80% on premium)", "daily loss breaker at −20%",
                     "continuous runs, events preempt, reasoning medium"],
         "brief": ("STYLE: AGGRESSIVE. Options are the primary instrument for fast setups: bought calls and puts (single contracts) sized "
-                  "$100–150 of premium (ONE contract at $1.00–1.50, never a $10–25 lottery contract), verticals when IV/RV is above ~1.3. When a fast setup "
+                  "$100–150 of premium (ONE contract at $1.00–1.50, never a $10–25 lottery contract), verticals when IV/RV is above ~1.3. Bullish view = bought "
+                  "call on a breakout or reclaim; bearish view = bought put on a breakdown (arm_entry direction below, expression put). There is NO VIX gate "
+                  "on single options. The engine refuses a stock entry on a fast idea when a qualifying contract exists and hands you the contract. A $500 book "
+                  "cannot buy at-the-money options on $200-400 stocks (one contract runs $300-1500), so hunt option ideas among underlyings priced roughly "
+                  "$15-80 with liquid chains (screen_stocks with 'price < 80 and avg_dollar_vol20_m > 30'), where one 7-21 DTE contract costs $60-150. When a fast setup "
                   "qualifies (horizon of hours to 2 days, a catalyst, a clean level), the DEFAULT expression is a bought call or put; stock is the fallback, "
                   "not the other way round. Take the probe NOW when a thesis is decent; do not park it as an arm below the market. Faster exits: first target +60–80% "
                   "on premium, cut at 50%. Stock only for slower theses or names without a liquid chain. Still cash-only, still no writing."),

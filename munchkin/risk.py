@@ -255,8 +255,12 @@ class RiskEngine:
         if cost + existing > cap + 0.01:
             v.append(f"exposure to {root} would be ${cost + existing:.2f} (stock + options combined) > cap ${cap:.2f}{cap_note}")
         probe_max = float(getattr(self.L, "probe_max", 0) or 0)
+        probe_min = float(getattr(self.L, "probe_min", 0) or 0)
         if probe_max and existing <= 0.01 and cost > probe_max + 0.01:
             v.append(f"first entry into {root} is a probe: ${cost:.2f} > the style's probe maximum ${probe_max:.0f}; open the probe, then add on evidence up to the cap")
+        deployable = st.virtual_settled_cash - float(getattr(st, "virtual_equity", 0) or 0) * float(getattr(self.L, "min_cash_pct", 0) or 0)
+        if probe_min and existing <= 0.01 and cost < probe_min - 0.01 and deployable >= probe_min:
+            v.append(f"first entry into {root} is ${cost:.2f} < the style's probe minimum ${probe_min:.0f}; size the probe properly (deployable ${deployable:.2f}) or skip it")
         try:
             v += self.policy_checks(st, cost, symbol, positions, horizon, bool(parse_occ(symbol)))
         except Exception as e:

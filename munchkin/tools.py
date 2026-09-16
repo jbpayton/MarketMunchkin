@@ -126,6 +126,52 @@ class ToolRegistry:
             base += " | legs: " + "; ".join(f"{occ_human(l.get('symbol',''))} {l.get('side')} {l.get('position_intent')} filled={l.get('filled_qty')}@{l.get('filled_avg_price')}" for l in legs)
         return base
 
+    def _options_first_block(self, symbol: str, direction: str, horizon: str | None, notional: float) -> str | None:
+        """Aggressive: a fast directional idea on a name with a qualifying chain is expressed as a bought call/put. Returns the
+        refusal text (with the contract to buy) or None when stock is acceptable (slow thesis, no chain, nothing under the premium cap)."""
+        L = self.ctx.settings.risk
+        if not getattr(L, "options_first", False) or not L.allow_options or not L.allow_singles:
+            return None
+        from .book import parse_horizon_days
+        hd = parse_horizon_days(horizon)
+        if hd is not None and hd > float(getattr(L, "slow_horizon_days", 5) or 5):
+            return None   # slow theses are stock (and capped elsewhere)
+        try:
+            from .optentry import limit_for, resolve_affordable
+            u = symbol.upper()
+            ctype = "put" if direction == "bearish" else "call"
+            today = now_et().date()
+            dte_min, dte_max = max(int(L.min_option_dte) + 1, 5), 30
+            contracts = self.ctx.broker.option_contracts(u, today + dt.timedelta(days=dte_min), today + dt.timedelta(days=dte_max), ctype, limit=2000)
+            if not contracts:
+                return None
+            oi = {k["symbol"]: k for k in contracts}
+            rows = self.ctx.market.option_chain(u, dte_min, dte_max, 10.0, ctype, oi_map=oi)
+            budget = float(getattr(L, "options_first_max_premium", 150.0) or 150.0)   # the premium cap, not the stock notional
+            legs, limit, note = resolve_affordable(rows, ctype, budget, 14, dte_min)
+            expr = ctype
+            if legs and (limit * 100 < 40 or abs(float(legs[0][0].get("delta") or 0)) < 0.35):
+                legs = []   # a $30 lottery contract or a far-OTM single is not the expression we mean
+            if not legs and L.allow_spreads:   # a single over the cap: a debit vertical keeps the max loss at the premium too
+                expr = ctype + "_spread"
+                legs, limit, note = resolve_affordable(rows, expr, budget, 14, dte_min)
+                if legs and len(legs) == 2:
+                    k1, k2 = float(legs[0][0].get("strike") or 0), float(legs[1][0].get("strike") or 0)
+                    if not k1 or abs(k2 - k1) / k1 < 0.015 or limit * 100 < 40:
+                        legs = []   # a hair-wide vertical is not a position
+                        note = "only hair-wide verticals fit the cap"
+            self._options_first_reason = note
+            if not legs:
+                return None
+            desc = " / ".join(f"{side} {r['symbol']} (δ {r['delta']}, {r['bid']}/{r['ask']})" for r, side in legs)
+            tool = f"buy_option(option_symbol='{legs[0][0]['symbol']}', qty=1, limit_price={limit:.2f}, ...)" if expr == ctype else f"open_spread(legs=[...], qty=1, net_debit={limit:.2f}, ...)"
+            return (f"REJECTED (Aggressive is options-first): a fast {direction} idea on {u} is expressed as a bought {expr.replace('_', ' ')}, not stock. "
+                    f"Qualifying now: {desc} at ~${limit:.2f} = ${limit * 100:.0f} of premium (exp {legs[0][0]['exp']}, {legs[0][0]['dte']} DTE); max loss = that premium. "
+                    f"Use {tool} now, or arm_entry(expression='{expr}') for a trigger. Stock is only for slow theses (> {getattr(L, 'slow_horizon_days', 5):g} trading days) or names with no contract under ${budget:.0f}.")
+        except Exception as e:
+            self._options_first_reason = f"chain error: {str(e)[:80]}"
+            return None
+
     def _laggard_note(self, symbol: str, thesis: str) -> str | None:
         """A thesis that buys into a sector the tape has been punishing should say so; this is a note, not a refusal."""
         try:
@@ -940,6 +986,9 @@ class ToolRegistry:
             pos = self._positions()
             st = c.risk.state(positions=pos)
             viol = c.research.gate(symbol) + c.risk.check_stock_buy(symbol, cost, price, order_type, limit_price, st, pos, grade, horizon=horizon)
+            of = self._options_first_block(symbol, "bullish", horizon, cost)
+            if of:
+                viol.append(of)
             if qty is not None and float(qty) != int(float(qty)) and order_type == "limit":
                 viol.append("fractional quantities require market orders (use notional or whole shares for limits)")
             ref = est_px or price
@@ -1270,6 +1319,9 @@ class ToolRegistry:
             if expression != "stock" and not (7 <= int(dte_target) <= 60):
                 return "ERROR: dte_target must be 7-60 for option expressions"
             if expression == "stock":
+                of = self._options_first_block(u, "bearish" if direction == "below" and float(stop_price) > float(trigger_price) else "bullish", horizon, float(notional))
+                if of:
+                    return of
                 try:
                     if any(p.get("symbol") == u for p in c.broker.positions()):
                         return (f"REJECTED: {u} stock is already held; a stock arm on a held name would be dropped by the watcher. "

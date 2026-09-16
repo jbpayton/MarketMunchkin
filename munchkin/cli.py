@@ -275,7 +275,8 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
                  "reserve, the sector cap, the slow-thesis cap, or the expected-move bar). For each: exact entry (price or trigger), stop, target, "
                  "size (a probe, then adds on evidence), expression (stock / call / put / debit spread with the IV read) and catalyst grade with source. "
                  "If a setup is valid at the current price, open the probe now; arm only genuinely conditional entries within one daily ATR. "
-                 "Setups whose backtest measured entry at the signal close are bought at the signal, not below it. Ending flat is fine when nothing clears the bar; say so in one line.")
+                 "Setups whose backtest measured entry at the signal close are bought at the signal, not below it. Ending flat is fine when nothing clears the bar; say so in one line. "
+                 + ("Under Aggressive the board must include bullish AND bearish candidates expressed as bought calls and puts on underlyings whose one-contract premium fits $60-150 (price roughly $15-80, liquid chain); stock is the fallback for slow theses only." if get_style(j) == "aggressive" else ""))
         try:
             from . import screener as scr
             from .book import book_state

@@ -784,3 +784,39 @@ def test_dial_flips_and_theme_news_wake_only_dependent_positions(tmp_path, monke
     assert w.j.kv["watch:dials"]["oil"] == -0.9 and len(w.j.kv["watch:theme_seen"]) == 2
     ev2 = w.check_world([{"symbol": "SO"}])                                   # same headlines again: silence
     assert not [e for e in ev2 if e.startswith("THEME NEWS")]
+
+
+def test_options_first_refuses_fast_stock_ideas_with_a_contract(monkeypatch):
+    from munchkin.tools import ToolRegistry
+    from munchkin.styles import effective_limits
+    from munchkin.config import RiskLimits, Settings
+    reg = ToolRegistry.__new__(ToolRegistry)
+    class Ctx: pass
+    ctx = Ctx(); ctx.settings = Settings(risk=effective_limits(RiskLimits(), "aggressive"))
+    class B:
+        def option_contracts(self, u, a, b, t, limit=2000): return [{"symbol": "X260925C00100000", "open_interest": 500}]
+    class M:
+        def option_chain(self, u, a, b, m, t, oi_map=None): return [{"symbol": "X260925C00100000", "exp": "2026-09-25", "dte": 9, "delta": 0.52, "bid": 1.10, "ask": 1.20, "type": "call", "strike": 100.0}]
+    ctx.broker, ctx.market = B(), M(); reg.ctx = ctx
+    r = reg._options_first_block("X", "bullish", "hours", 120.0)
+    assert r and r.startswith("REJECTED (Aggressive is options-first)") and "X260925C00100000" in r and "buy_option" in r
+    assert reg._options_first_block("X", "bullish", "3-10 trading days", 120.0) is None          # slow theses stay stock
+    ctx.settings = Settings(risk=effective_limits(RiskLimits(), "balanced"))
+    assert reg._options_first_block("X", "bullish", "hours", 120.0) is None                       # only Aggressive is options-first
+    ctx.settings = Settings(risk=effective_limits(RiskLimits(), "aggressive"))
+    class M2:
+        def option_chain(self, u, a, b, m, t, oi_map=None): return [{"symbol": "X260925C00100000", "exp": "2026-09-25", "dte": 9, "delta": 0.52, "bid": 4.10, "ask": 4.30, "type": "call", "strike": 100.0}]
+    ctx.market = M2()
+    assert reg._options_first_block("X", "bullish", "hours", 120.0) is None                       # $420 premium: nothing under the cap, stock allowed
+
+
+def test_probe_minimum_is_enforced_when_cash_allows():
+    from munchkin.risk import RiskEngine, RiskState
+    from munchkin.styles import effective_limits
+    from munchkin.config import RiskLimits
+    e = RiskEngine.__new__(RiskEngine); e.L = effective_limits(RiskLimits(), "aggressive"); e.j = type("J", (), {"reserved_total": lambda self: 0.0, "thesis_for": lambda self, s: {}})()
+    st = RiskState.__new__(RiskState); st.max_position_notional = 250.0; st.halted = False; st.daily_loss_breached = False; st.positions_count = 1
+    st.virtual_equity = 500.0; st.virtual_settled_cash = 320.0
+    assert any("probe minimum $100" in x for x in e._entry_common(st, 50.0, "AEE", [], horizon="hours"))
+    st.virtual_settled_cash = 140.0                                                              # deployable $40: a $40 probe is all there is
+    assert not any("probe minimum" in x for x in e._entry_common(st, 40.0, "AEE", [], horizon="hours"))
