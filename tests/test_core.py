@@ -944,3 +944,23 @@ def test_option_through_its_stop_is_sold_at_the_bid(monkeypatch):
     acts = x.ensure([{"symbol": "CRWV260925P00075000", "qty": "1"}], [])
     assert x.b.sold == [("CRWV260925P00075000", "sell", 1, 1.36, "sell_to_close")] and acts[0].startswith("STOP:") and "exits:CRWV260925P00075000" not in x.j.kv
     assert x.j.decisions[0][1]["meta"]["mechanical"] is True
+
+
+def test_daemon_only_references_settings_that_exist():
+    """The terminology rename once mangled a settings attribute the daemon reads off-hours; tests passed and the daemon crash-looped."""
+    import re, pathlib
+    from munchkin.config import Settings
+    S = Settings()
+    src = pathlib.Path("munchkin/cli.py").read_text()
+    bad = []
+    for m in re.finditer(r"SETTINGS\.(lab|watch|risk|llm|schedule)\.([A-Za-z_]+)", src):
+        if not hasattr(getattr(S, m.group(1)), m.group(2)):
+            bad.append(m.group(0))
+    for m in re.finditer(r"\bW\.([A-Za-z_]+)", src):
+        if not hasattr(S.watch, m.group(1)):
+            bad.append("W." + m.group(1))
+    for m in re.finditer(r"\bcfg\.([A-Za-z_]+)", pathlib.Path("munchkin/experiments.py").read_text()):
+        from munchkin.experiments import ExperimentConfig
+        if not hasattr(ExperimentConfig(), m.group(1)):
+            bad.append("cfg." + m.group(1))
+    assert bad == [], bad

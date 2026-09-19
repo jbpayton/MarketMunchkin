@@ -111,6 +111,17 @@ def daemon(once: bool = typer.Option(False, help="one loop iteration and exit"))
     n_orphans = j.close_orphans()
     if n_orphans:
         j.add_event("error", f"closed {n_orphans} orphaned run(s) left by a previous daemon stop")
+    # crash-loop alarm: starts inside a short window mean systemd is restarting a daemon that dies at boot
+    try:
+        from . import telegram as _TG
+        starts = [t for t in (j.get("daemon:starts") or []) if t >= (now_et() - dt.timedelta(minutes=10)).isoformat(timespec="seconds")]
+        starts.append(now_et().isoformat(timespec="seconds"))
+        j.set("daemon:starts", starts[-20:])
+        if len(starts) >= 3:
+            j.add_event("error", f"daemon started {len(starts)} times in 10 minutes: probably crashing at boot; check journalctl --user -u munchkin-daemon")
+            _TG.notify(f"Daemon restarted {len(starts)} times in 10 minutes and is probably crashing at boot. Check: journalctl --user -u munchkin-daemon -n 60", kind="errors", force=True)
+    except Exception as e:
+        logging.warning("crash-loop check failed: %s", e)
     stop_requested = {"flag": False}
     degraded = {"flag": False}
     import queue
