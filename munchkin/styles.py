@@ -34,7 +34,7 @@ STYLES: dict[str, dict[str, Any]] = {
     "balanced": {
         "label": "Balanced",
         "tagline": "Stock plus defined-risk options. Speculative ideas at half size.",
-        "risk": {"max_position_pct": 0.40, "max_positions": 5, "max_options_pct": 0.60, "max_daily_loss_pct": 0.15,
+        "risk": {"max_position_pct": 0.40, "max_positions": 5, "max_options_pct": 0.40, "max_daily_loss_pct": 0.15, "max_directional_options_pct": 0.30, "max_option_positions": 2,
                  "size_mult_speculative": 0.5, "size_mult_no_catalyst": 0.35, "allow_options": True, "allow_spreads": True,
                  "allow_singles": True, "probe_min": 50, "probe_max": 100, "research_min_charts": 4,
                  "min_cash_pct": 0.25, "max_sector_pct": 0.50, "max_slow_pct": 0.60, "min_expected_move_pct": 2.0},
@@ -49,22 +49,22 @@ STYLES: dict[str, dict[str, Any]] = {
     "aggressive": {
         "label": "Aggressive",
         "tagline": "High-risk, high-reward: bought calls and puts on fast setups, bigger probes, faster exits.",
-        "risk": {"max_position_pct": 0.50, "max_positions": 6, "max_options_pct": 0.75, "max_daily_loss_pct": 0.20,
+        "risk": {"max_position_pct": 0.50, "max_positions": 6, "max_options_pct": 0.50, "max_daily_loss_pct": 0.20, "max_directional_options_pct": 0.35, "max_option_positions": 2,
                  "size_mult_speculative": 0.75, "size_mult_no_catalyst": 0.5, "allow_options": True, "allow_spreads": True,
-                 "allow_singles": True, "probe_min": 100, "probe_max": 250, "research_min_charts": 4,
+                 "allow_singles": True, "probe_min": 100, "probe_max": 200, "research_min_charts": 4,
                  "min_cash_pct": 0.20, "max_sector_pct": 0.50, "max_slow_pct": 0.40, "min_expected_move_pct": 3.0, "options_first": True,
-                 "options_first_max_premium": 250.0},
+                 "options_first_max_premium": 200.0},
         "watch": {"min_gap_seconds": 60, "position_move_pct": 2.5},
         "reasoning": "medium",
-        "summary": ["bought calls and puts preferred for fast setups; verticals when IV is rich", "$100–250 probes, 50% per position, 6 positions max",
+        "summary": ["bought calls and puts preferred for fast setups; verticals when IV is rich", "$100–200 probes, 50% per position, 6 positions max",
                     "speculative catalysts at 0.75, unexplained moves at 0.5", "tighter stops, faster exits (+60–80% on premium)", "daily loss breaker at −20%",
                     "continuous runs, events preempt, reasoning medium"],
         "brief": ("STYLE: AGGRESSIVE. Options are the primary instrument for fast setups: bought calls and puts (single contracts) sized "
-                  "$100–250 of premium (ONE contract at $1.00–2.50, never a $10–25 lottery contract), verticals when IV/RV is above ~1.3. Bullish view = bought "
+                  "$100–200 of premium (ONE contract at $1.00–2.00, never a $10–25 lottery contract), verticals when IV/RV is above ~1.3. Bullish view = bought "
                   "call on a breakout or reclaim; bearish view = bought put on a breakdown (arm_entry direction below, expression put). There is NO VIX gate "
                   "on single options. The engine refuses a stock entry on a fast idea when a qualifying contract exists and hands you the contract. A $500 book "
                   "cannot buy at-the-money options on $200-400 stocks (one contract runs $300-1500), so hunt option ideas among underlyings priced roughly "
-                  "$15-80 with liquid chains (screen_stocks with 'price < 80 and avg_dollar_vol20_m > 30'), where one 7-21 DTE contract costs $60-250. When a fast setup "
+                  "$15-80 with liquid chains (screen_stocks with 'price < 80 and avg_dollar_vol20_m > 30'), where one 7-21 DTE contract costs $60-200. At most two option positions at once and no more than 35% of equity in one direction: two puts on the same view is ONE bet, so the second one must be a different view or wait. When a fast setup "
                   "qualifies (horizon of hours to 2 days, a catalyst, a clean level), the DEFAULT expression is a bought call or put; stock is the fallback, "
                   "not the other way round. Take the probe NOW when a thesis is decent; do not park it as an arm below the market. Faster exits: first target +60–80% "
                   "on premium, cut at 50%. Stock only for slower theses or names without a liquid chain. Still cash-only, still no writing."),

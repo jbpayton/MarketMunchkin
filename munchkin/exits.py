@@ -73,7 +73,7 @@ class ExitManager:
                                          client_order_id=f"mmstop-{symbol[:12]}-{int(time.time())}")
         except Exception as e:
             log.warning("stop placement failed for %s: %s", symbol, e)
-            self.j.set_exits(symbol, stop_error=str(e)[:160])
+            self.j.set_exits(symbol, stop_error=str(e)[:160], stop_error_ts=now_et().isoformat(timespec="seconds"))
             return None
         self.j.set_exits(symbol, stop_order_id=o.get("id"), stop_tif=tif, stop_error=None)
         self.j.add_decision(None, "exit_order", symbol, side="sell", qty=qty, price=stop_price, order_id=o.get("id"),
@@ -112,20 +112,55 @@ class ExitManager:
                     except Exception as e:
                         log.warning("cancel stale stop %s: %s", o["id"], e)
                 time.sleep(1.5)
-            # avoid firing a stop that is already through: leave it to the agent if price is at/below the stop
-            try:
-                px = self.m.price(parse_occ(sym)["underlying"]) if is_option(sym) else self.m.price(sym)
-            except Exception:
-                px = None
-            if not is_option(sym) and px is not None and px <= stop:
-                actions.append(f"{sym}: price {px} already at/below stop {stop}; not placing a stop order (agent must act)")
-                continue
+            if is_option(sym):
+                # options: the stop is mechanical on the mark. Through the stop = sell to close at the bid now (a broker stop
+                # order below the market is rejected, and retrying it every minute is what left a position unprotected).
+                try:
+                    snap = self.m.option_snapshots([sym])[0]
+                    bid, mark = snap.get("bid"), snap.get("mid") or snap.get("bid")
+                except Exception:
+                    bid = mark = None
+                if mark is not None and float(mark) <= stop:
+                    if not bid:
+                        actions.append(f"{occ_human(sym)}: mark {mark} through stop {stop} but no bid; retrying")
+                        continue
+                    try:
+                        self.b.cancel_orders_for(sym, "sell", open_orders)
+                        o = self.b.submit_option_order(sym, "sell", int(qty), round(float(bid), 2), "sell_to_close")
+                        self.j.add_decision(None, "close", sym, side="sell", qty=qty, price=float(bid), order_id=o.get("id"), status=o.get("status", "submitted"),
+                                            meta={"reason": f"mechanical stop: mark {mark} <= stop {stop}; sold at the bid", "mechanical": True}, underlying=parse_occ(sym)["underlying"])
+                        self.j.clear_exits(sym)
+                        actions.append(f"STOP: {occ_human(sym)} mark {mark} <= stop {stop}: sold {int(qty)}x to close at {bid} (order {o.get('id')})")
+                    except Exception as e:
+                        actions.append(f"{occ_human(sym)}: mechanical stop sell FAILED: {str(e)[:100]}; act now")
+                    continue
+                last_err = (lv.get("stop_error") or "")
+                if last_err and self._recent_error(sym, minutes=10):
+                    continue   # do not hammer the broker every minute with the same rejected order
+            else:
+                try:
+                    px = self.m.price(sym)
+                except Exception:
+                    px = None
+                if px is not None and px <= stop:
+                    actions.append(f"{sym}: price {px} already at/below stop {stop}; not placing a stop order (agent must act)")
+                    continue
             o = self.place_stop(sym, qty, stop)
             if o:
                 actions.append(f"{occ_human(sym)}: placed {o.get('time_in_force')} stop {qty:g} @ {stop} (order {o.get('id')})")
             else:
                 actions.append(f"{occ_human(sym)}: stop placement FAILED ({(self.j.exits(sym) or {}).get('stop_error')})")
         return actions
+
+    def _recent_error(self, symbol: str, minutes: int) -> bool:
+        lv = self.j.exits(symbol) or {}
+        ts = lv.get("stop_error_ts")
+        if not ts:
+            return False
+        try:
+            return (now_et() - dt.datetime.fromisoformat(ts)).total_seconds() < minutes * 60
+        except Exception:
+            return False
 
     def describe(self, symbol: str, open_orders: list[dict[str, Any]]) -> dict[str, Any]:
         lv = self.j.exits(symbol) or {}

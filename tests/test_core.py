@@ -667,7 +667,7 @@ def test_first_entry_is_capped_at_the_probe_maximum():
     e = RiskEngine.__new__(RiskEngine); e.L = effective_limits(RiskLimits(), "aggressive"); e.j = type("J", (), {"reserved_total": lambda self: 0.0})()
     st = RiskState.__new__(RiskState); st.max_position_notional = 250.0; st.halted = False; st.daily_loss_breached = False; st.positions_count = 1; st.virtual_settled_cash = 400.0
     v = e._entry_common(st, 295.0, "PNW", [])
-    assert any("probe maximum $250" in x for x in v)                    # a $295 first entry is not a probe
+    assert any("probe maximum $200" in x for x in v)                    # a $295 first entry is not a probe
     assert not any("probe" in x for x in e._entry_common(st, 140.0, "PNW", []))
     held = [{"symbol": "PNW", "cost_basis": "140.0"}]
     assert not any("probe" in x for x in e._entry_common(st, 100.0, "PNW", held))   # adds are governed by the cap, not the probe
@@ -888,3 +888,59 @@ def test_signal_wake_text_offers_the_contract_or_the_reason(tmp_path):
     assert text.startswith("SIGNAL: LRCX bearish opening-range breakout at 15:40") and "expression ready: buy LRCX260925P00090000" in text and "buy_option(" in text
     ctx.settings = Settings(risk=effective_limits(RiskLimits(), "defensive"))
     assert "not expressible under this style" in signal_wake_text(st, ctx, sid)
+
+
+def test_day_start_equity_comes_from_our_record(tmp_path):
+    from munchkin.journal import Journal
+    from munchkin.risk import RiskEngine
+    j = Journal(tmp_path / "ds.db")
+    j.conn.execute("INSERT INTO equity(ts, equity, cash, market_open) VALUES ('2026-09-17T23:38:30-04:00', 413.08, 285.08, 0)")
+    j.conn.execute("INSERT INTO equity(ts, equity, cash, market_open) VALUES ('2026-09-16T23:58:14-04:00', 495.16, 495.16, 0)")
+    j.conn.commit()
+    e = RiskEngine.__new__(RiskEngine); e.j = j
+    import munchkin.risk as R, datetime as dt
+    from munchkin.util import ET
+    e_now = lambda: dt.datetime(2026, 9, 18, 0, 3, tzinfo=ET)
+    import unittest.mock as um
+    with um.patch.object(R, "now_et", e_now):
+        assert e._day_start_equity({"last_equity": "495.16", "equity": "413.0"}) == 413.08    # ours, not the broker's stale figure
+    j2 = Journal(tmp_path / "empty.db"); e2 = RiskEngine.__new__(RiskEngine); e2.j = j2
+    with um.patch.object(R, "now_et", e_now):
+        assert e2._day_start_equity({"last_equity": "500.0", "equity": "499.0"}) == 500.0     # no history: broker fallback
+
+
+def test_directional_option_cap_and_position_count():
+    from munchkin.risk import RiskEngine, RiskState
+    from munchkin.styles import effective_limits
+    from munchkin.config import RiskLimits
+    e = RiskEngine.__new__(RiskEngine); e.L = effective_limits(RiskLimits(), "aggressive")
+    st = RiskState.__new__(RiskState); st.virtual_equity = 495.0
+    held = [{"symbol": "OXY261002P00059000", "cost_basis": "179.0"}]
+    v = e._directional_checks(st, 178.0, "CRWV260925P00075000", held)                   # the second put of 09-17
+    assert any("directional cap" in x and "puts" in x for x in v)
+    assert not e._directional_checks(st, 150.0, "CRWV260925C00090000", held)            # a call is a different view (30% < 35%)
+    held2 = held + [{"symbol": "AAPL261002C00200000", "cost_basis": "120.0"}]
+    assert any("max option positions (2)" in x for x in e._directional_checks(st, 50.0, "MSFT261002C00400000", held2))
+    assert not any("max option positions" in x for x in e._directional_checks(st, 50.0, "AAPL261002C00200000", held2))   # adding to a held contract
+
+
+def test_option_through_its_stop_is_sold_at_the_bid(monkeypatch):
+    from munchkin.exits import ExitManager
+    class J:
+        def __init__(self): self.kv, self.decisions = {"exits:CRWV260925P00075000": {"stop_price": 1.5}}, []
+        def all_exits(self): return {k[6:]: v for k, v in self.kv.items() if k.startswith("exits:") and v}
+        def exits(self, s): return self.kv.get("exits:" + s)
+        def clear_exits(self, s): self.kv.pop("exits:" + s, None)
+        def set_exits(self, s, **f): self.kv.setdefault("exits:" + s, {}).update(f)
+        def add_decision(self, *a, **k): self.decisions.append((a, k))
+    class B:
+        def __init__(self): self.sold = []; self.cancelled = 0
+        def cancel_orders_for(self, sym, side, oo): self.cancelled += 1; return 0
+        def submit_option_order(self, sym, side, qty, limit, intent, client_order_id=None): self.sold.append((sym, side, qty, limit, intent)); return {"id": "s1", "status": "accepted"}
+        def submit_stop_order(self, *a, **k): raise AssertionError("no stop order should be placed below the market")
+    class M:
+        def option_snapshots(self, syms): return [{"symbol": syms[0], "bid": 1.36, "ask": 1.44, "mid": 1.40}]
+    x = ExitManager.__new__(ExitManager); x.j, x.b, x.m = J(), B(), M()
+    acts = x.ensure([{"symbol": "CRWV260925P00075000", "qty": "1"}], [])
+    assert x.b.sold == [("CRWV260925P00075000", "sell", 1, 1.36, "sell_to_close")] and acts[0].startswith("STOP:") and "exits:CRWV260925P00075000" not in x.j.kv
+    assert x.j.decisions[0][1]["meta"]["mechanical"] is True

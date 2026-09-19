@@ -94,6 +94,8 @@ class RiskLimits(BaseModel):
     max_slow_pct: float = 0.60             # capital in theses slower than slow_horizon_days
     slow_horizon_days: float = 5.0
     min_expected_move_pct: float = 2.0     # return-on-time bar for STOCK entries: ATR% x sqrt(horizon days) must clear this (options are exempt)
+    max_directional_options_pct: float = 0.35   # open premium in one direction (all calls, or all puts) as a share of equity: two puts on one view is one bet
+    max_option_positions: int = 2          # concurrent option positions (singles + spreads)
     options_first: bool = False            # Aggressive: a fast directional idea on a name with a qualifying chain must be a bought call/put, not stock
     options_first_max_premium: float = 150.0   # one contract at or under this premium (in dollars) counts as qualifying
 

@@ -116,7 +116,7 @@ sector, beta, horizon, age and progress, concentration and style-fit flags, and 
 | sector cap | 50% | 50% | 50% |
 | capital in slow theses (> 5 Runs) | no cap | 60% | 40% |
 | return-on-time bar for stock entries | none | 2% | 3% |
-| first entry into a name (probe) | $50–75 | $50–100 | $100–250 |
+| first entry into a name (probe) | $50–75 | $50–100 | $100–200 |
 
 The return-on-time bar is the daily ATR times the square root of the holding days: a stock position has to be able to
 pay for its holding period, or it is expressed as an option, which is what the aggressive style is for. Duties follow
@@ -129,15 +129,17 @@ raises an event when a position's journaled horizon elapses, and the agent must 
 Three operator-selected styles change the risk envelope, the instruments, the cadence and the agent's brief.
 The active style applies from the next run, and **switching it queues a reevaluation run** that re-judges every armed entry (keep, re-express, resize, disarm) and every position (keep, trim, exit) against the new rules; `munchkin reevaluate --reason ...` fires the same run after any rule change.
 
-Under Aggressive the engine is **options-first**: a fast directional idea (horizon of hours to a few days) on a name with a bought call or put, or a real debit vertical, at or under $250 of premium is refused as stock, and the refusal names the contract, the limit and the tool to use. Bearish views are bought puts on breakdown triggers. Stock remains for slow theses (over five trading days, capped at 40% of the book) and for names whose contracts cost more than the cap. The agent's own playbook may add caution to an instrument but can never ban one the style allows. Since at-the-money options on $200 to $400 stocks cost $300 to $1,500 a contract, the board is steered to liquid underlyings priced roughly $15 to $120, where one contract fits.
+Under Aggressive the engine is **options-first**: a fast directional idea (horizon of hours to a few days) on a name with a bought call or put, or a real debit vertical, at or under $200 of premium is refused as stock, and the refusal names the contract, the limit and the tool to use. Bearish views are bought puts on breakdown triggers. Stock remains for slow theses (over five trading days, capped at 40% of the book) and for names whose contracts cost more than the cap. The agent's own playbook may add caution to an instrument but can never ban one the style allows. Since at-the-money options on $200 to $400 stocks cost $300 to $1,500 a contract, the board is steered to liquid underlyings priced roughly $15 to $120, where one contract fits.
 
 | | Defensive | Balanced (default) | Aggressive |
 |---|---|---|---|
 | instruments | stock only | stock, bought calls/puts, debit verticals | **options-first, enforced**: a fast idea with a qualifying contract is refused as stock and handed the call, put or debit vertical to buy |
-| probes | $50–75 | $50–100 | $100–250 |
+| probes | $50–75 | $50–100 | $100–200 (one contract of premium) |
 | per position / positions | 25% / 4 | 40% / 5 | 50% / 6 |
 | catalyst grades | confirmed only | speculative ×0.5, unexplained ×0.35 | speculative ×0.75, unexplained ×0.5 |
-| options budget | 0% | 60% of equity | 75% of equity |
+| options budget | 0% | 40% of equity | 50% of equity |
+| open premium in one direction (all calls or all puts) | – | 30% | 35% |
+| concurrent option positions | – | 2 | 2 |
 | daily loss breaker | −8% | −15% | −20% |
 | cadence / reasoning | 3 min gap, high | 60 s gap, medium | 60 s gap, events preempt, medium |
 
@@ -199,7 +201,10 @@ Under Aggressive the engine is **options-first**: a fast directional idea (horiz
 - **Watcher.** A separate thread with its own broker, market and journal connections: fills, resting stops,
   targets, moves, headlines, expiry, armed entries, spread management. A fire that overshoots a cap by cents is
   trimmed to fit rather than blocked.
-- **Exits.** Every entry carries a numeric stop and target. A protective stop rests at the broker (GTC for whole
+- **Exits.** Every entry carries a numeric stop and target. A bought option always has a premium stop (default half the
+  premium), mechanical on the mark: the watcher sells to close at the bid the moment the mark is at or through it, since a
+  broker stop order below the market is rejected. The daily-loss baseline is yesterday's close from the journal's own
+  equity record, not the broker's previous-close field, which is not rolled at midnight. A protective stop rests at the broker (GTC for whole
   shares, DAY re-armed each morning for fractional shares and options). Targets are taken by the watcher itself
   (`[watch] target_mode = "take"`, `target_take_pct`): stock at market, single options at the bid, verticals as one
   order, then the agent is woken to review; set `target_mode = "wake"` to let the agent decide instead. Stops only

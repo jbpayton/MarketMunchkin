@@ -1085,8 +1085,12 @@ class ToolRegistry:
             st = c.risk.state(positions=pos)
             viol, info = c.risk.check_option_buy(sym, int(qty), float(limit_price), st, pos, self._acct_level(), grade, horizon=horizon)
             viol = (c.research.gate(pp["underlying"]) if pp else []) + viol
-            if stop_premium is not None and not (0 < float(stop_premium) < float(limit_price)):
+            if stop_premium is None:
+                stop_premium = round(float(limit_price) * 0.5, 2)   # every option carries a stop: default 50% of the premium
+            if not (0 < float(stop_premium) < float(limit_price)):
                 viol.append(f"stop_premium {stop_premium} must be below the limit price {limit_price}")
+            if target_premium is None:
+                target_premium = round(float(limit_price) * 2.0, 2)
             meta = {"catalyst_grade": grade, "info": info, "stop_price": stop_premium, "target_price": target_premium, "depends_on": depends_on.strip()[:160], "invalidated_by": invalidated_by.strip()[:200]}
             if viol:
                 self._journal_order("open", sym, "buy", qty, limit_price, None, "blocked", {**meta, "violations": viol}, thesis=thesis, target=target, stop=stop, horizon=horizon)
@@ -1106,7 +1110,7 @@ class ToolRegistry:
                           "thesis": _p("thesis", "string", "why + catalyst inside the holding window"), "target": _p("target", "string", "exit target (premium or underlying level)"),
                           "stop": _p("stop", "string", "exit condition on the downside"), "horizon": _p("horizon", "string", "planned holding period"),
                           "catalyst_grade": _p("catalyst_grade", "string", "confirmed | speculative | none (scales the size cap 1.0 / 0.5 / 0.35)"),
-                          "stop_premium": _p("stop_premium", "number", "per-share premium at which to stop out; a DAY stop order rests at the broker (re-armed each morning)"),
+                          "stop_premium": _p("stop_premium", "number", "per-share premium at which to stop out (default: half the limit); the watcher closes the position at the bid when the mark is at or through it"),
                           "target_premium": _p("target_premium", "number", "per-share premium target; the daemon wakes you when the mark reaches it"), "depends_on": _p("depends_on", "string", "the driver or theme this thesis expresses (e.g. oil shock, FOMC hold, AI data-center power, sector: Utilities)"), "invalidated_by": _p("invalidated_by", "string", "what breaks it: a dial flip, a calendar outcome, a headline type")},
                          ["option_symbol", "qty", "limit_price", "thesis", "target", "stop", "horizon", "catalyst_grade"]), buy_option)
 

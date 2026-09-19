@@ -88,7 +88,19 @@ class RiskEngine:
         return self.j.get("baseline")
 
     def _day_start_equity(self, acct: dict[str, Any]) -> float:
-        key = f"day_start_equity:{now_et().date().isoformat()}"
+        """Yesterday's close from OUR equity record (the last sample before today). The broker's last_equity is not rolled
+        at midnight, so reading it then anchored the daily-loss breaker to the wrong day and tripped it on a phantom
+        loss. The kv cache is only a fallback for a journal with no history."""
+        today = now_et().date().isoformat()
+        key = f"day_start_equity:{today}"
+        try:
+            row = self.j.conn.execute("SELECT equity FROM equity WHERE ts < ? ORDER BY ts DESC LIMIT 1", (today,)).fetchone()
+        except Exception:
+            row = None
+        if row and row[0]:
+            v = float(row[0])
+            self.j.set(key, v)
+            return v
         v = self.j.get(key)
         if v is None:
             v = float(acct.get("last_equity") or acct["equity"])
@@ -355,6 +367,36 @@ class RiskEngine:
             v.append(f"{occ_human(symbol)} has no live quote")
         return v
 
+    def _option_book(self, positions: list[dict]) -> tuple[float, float, int]:
+        """(open premium in calls, open premium in puts, count of option positions) at cost."""
+        calls = puts = 0.0; n = 0
+        for p in positions:
+            if not is_option(p["symbol"]):
+                continue
+            n += 1
+            v = abs(float(p.get("cost_basis") or 0))
+            if (parse_occ(p["symbol"]) or {}).get("type") == "put":
+                puts += v
+            else:
+                calls += v
+        return calls, puts, n
+
+    def _directional_checks(self, st: RiskState, cost: float, symbol: str, positions: list[dict]) -> list[str]:
+        v: list[str] = []
+        calls, puts, n = self._option_book(positions)
+        eq = float(getattr(st, "virtual_equity", 0) or 0)
+        held = any(p["symbol"] == symbol for p in positions)
+        cap_n = int(getattr(self.L, "max_option_positions", 99) or 99)
+        if not held and n >= cap_n:
+            v.append(f"max option positions ({cap_n}) reached; close or let one expire before opening another")
+        cap = float(getattr(self.L, "max_directional_options_pct", 1.0) or 1.0)
+        if eq and cap < 1.0:
+            side = "puts" if (parse_occ(symbol) or {}).get("type") == "put" else "calls"
+            same = puts if side == "puts" else calls
+            if (same + cost) / eq > cap + 1e-9:
+                v.append(f"directional cap: ${same + cost:.2f} in {side} would be {(same + cost) / eq * 100:.0f}% of equity > {cap * 100:.0f}% (several {side} on one view is one bet)")
+        return v
+
     def check_option_buy(self, symbol: str, qty: int, limit_price: float | None, st: RiskState,
                          positions: list[dict], acct_level: int, grade: str | None = None, horizon: str | None = None) -> tuple[list[str], dict[str, Any]]:
         info = self._contract_info(symbol)
@@ -375,6 +417,7 @@ class RiskEngine:
         if not st.market_open:
             v.append("market is closed; option orders are day-only and will be rejected or sit until the open")
         v += self._entry_common(st, cost, symbol, positions, grade, horizon)
+        v += self._directional_checks(st, cost, symbol, positions)
         if cost > st.max_new_options_premium + 0.01:
             v.append(f"premium ${cost:.2f} exceeds remaining options budget ${st.max_new_options_premium:.2f} ({self.L.max_options_pct*100:.0f}% of equity cap)")
         info["cost"] = round(cost, 2)
@@ -431,4 +474,6 @@ class RiskEngine:
         v += self._entry_common(st, cost, parsed[0]["underlying"] if parsed else "?", positions, grade)
         if cost > st.max_new_options_premium + 0.01:
             v.append(f"net debit ${cost:.2f} exceeds remaining options budget ${st.max_new_options_premium:.2f}")
+        if legs:
+            v += self._directional_checks(st, cost, legs[0]["symbol"], positions)
         return v, infos
